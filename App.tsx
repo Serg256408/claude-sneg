@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import ContractorPortal from './components/ContractorPortal';
-import CustomerPortal from './components/CustomerPortal';
-import CustomerFormDispatcher from './components/CustomerForm_Dispatcher';
-import ContractorForm from './components/ContractorForm';
-import DriverPortal from './components/DriverPortal';
-import MapDashboard from './components/MapDashboard';
-import OrderForm from './components/OrderForm';
+import ContractorPortal from './ContractorPortal';
+import CustomerPortal from './CustomerPortal';
+import CustomerFormDispatcher from './CustomerForm_Dispatcher';
+import ContractorForm from './ContractorForm';
+import DriverPortal from './DriverPortal';
+import MapDashboard from './MapDashboard';
+import OrderForm from './OrderForm';
 import {
   AssetType,
   Bid,
