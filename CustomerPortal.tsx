@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { Order, OrderStatus, AssetType, AssetRequirement, OrderRestrictions, CustomerContact, formatPrice, formatDateTime, generateId, generateOrderNumber, PriceUnit } from '../types';
+import { Order, OrderStatus, AssetType, AssetRequirement, OrderRestrictions, CustomerContact, formatPrice, formatDateTime, generateId, generateOrderNumber, PriceUnit } from './types';
 
 interface CustomerPortalProps {
   orders: Order[];
@@ -134,73 +134,477 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, onAddOrder, onU
     setTimeout(() => setShareStatus(null), 5000);
   };
 
-  // Генерация текстового отчёта / счёта / договора (симуляция PDF)
-  const generateReport = useCallback(async (order: Order, type: 'act' | 'invoice' | 'full' | 'contract') => {
+  // Генерация закрывающих документов - улучшенная версия
+  const generateReport = useCallback(async (order: Order, type: 'act' | 'invoice' | 'full' | 'contract' | 'upd') => {
     setIsProcessingDoc(type);
-    
+
     // Симуляция генерации документа
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
     const totals = calculateOrderTotals(order);
-    
-    // Создаём текстовый отчёт (в реальном приложении - PDF)
-    const title =
-      type === 'act'
-        ? 'АКТ ВЫПОЛНЕННЫХ РАБОТ'
-        : type === 'invoice'
-        ? 'СЧЁТ НА ОПЛАТУ'
-        : type === 'contract'
-        ? 'ДОГОВОР НА ОКАЗАНИЕ УСЛУГ ПО ВЫВОЗУ СНЕГА'
-        : 'ПОЛНЫЙ ОТЧЁТ';
+    const docDate = new Date().toLocaleDateString('ru');
+    const docNumber = `${order.orderNumber || order.id.slice(0, 8)}-${type.toUpperCase()}`;
+    const confirmedEvidences = (order.evidences || []).filter(e => e.confirmed);
 
-    const reportContent = `
-═══════════════════════════════════════════════════════════
-                    SNOWFORCE MOSCOW DISPATCH
-                       ${title}
-═══════════════════════════════════════════════════════════
+    let reportContent = '';
 
-Заказ №: ${order.orderNumber || order.id}
-Дата: ${new Date().toLocaleDateString('ru')}
+    if (type === 'act') {
+      // АКТ ВЫПОЛНЕННЫХ РАБОТ
+      reportContent = `
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                ║
+║                         АКТ ВЫПОЛНЕННЫХ РАБОТ                                  ║
+║                              № ${docNumber.padEnd(20)}                         ║
+║                                                                                ║
+╠════════════════════════════════════════════════════════════════════════════════╣
+║  Дата составления: ${docDate.padEnd(58)}║
+╠════════════════════════════════════════════════════════════════════════════════╣
+
+ИСПОЛНИТЕЛЬ:
+  ООО "СНОУФОРС"
+  ИНН: 7700000000 / КПП: 770001001
+  Адрес: г. Москва, ул. Снежная, д. 1
 
 ЗАКАЗЧИК:
-  ${order.customer}
-  ${order.contactInfo?.phone || ''}
-  ${order.contactInfo?.email || ''}
+  ${order.customer || 'Не указан'}
+  ${order.contactInfo?.inn ? `ИНН: ${order.contactInfo.inn}` : ''}
+  Тел: ${order.contactInfo?.phone || 'Не указан'}
+  Email: ${order.contactInfo?.email || 'Не указан'}
 
-ОБЪЕКТ:
-  ${order.address}
-  
-ПЕРИОД РАБОТ:
-  Начало: ${formatDateTime(order.scheduledTime)}
-  ${order.completedAt ? `Завершение: ${formatDateTime(order.completedAt)}` : ''}
+═══════════════════════════════════════════════════════════════════════════════════
+                                ОБЪЕКТ РАБОТ
+═══════════════════════════════════════════════════════════════════════════════════
 
-═══════════════════════════════════════════════════════════
-                         ИТОГИ РАБОТ
-═══════════════════════════════════════════════════════════
+  Адрес: ${order.address || 'Не указан'}
+  Район: ${order.district || 'Не указан'}
 
-Выполнено рейсов: ${totals.totalTrips}
-${order.assetRequirements.map(req => 
-  `${req.type}: ${formatPrice(req.customerPrice || 0)} × ${req.type === AssetType.TRUCK ? totals.totalTrips : req.plannedUnits} = ${formatPrice((req.customerPrice || 0) * (req.type === AssetType.TRUCK ? totals.totalTrips : req.plannedUnits))}`
-).join('\n')}
+═══════════════════════════════════════════════════════════════════════════════════
+                              ПЕРИОД ВЫПОЛНЕНИЯ
+═══════════════════════════════════════════════════════════════════════════════════
 
-───────────────────────────────────────────────────────────
-ИТОГО К ОПЛАТЕ: ${formatPrice(totals.grandTotal)}
-───────────────────────────────────────────────────────────
+  Дата начала работ:    ${formatDateTime(order.scheduledTime)}
+  Дата окончания работ: ${order.completedAt ? formatDateTime(order.completedAt) : docDate}
 
-${type === 'full' ? `
-═══════════════════════════════════════════════════════════
-                       РЕЕСТР РЕЙСОВ
-═══════════════════════════════════════════════════════════
-${(order.evidences || []).map((ev, i) => 
-  `${i + 1}. ${formatDateTime(ev.timestamp)} - ${ev.driverName} ${ev.confirmed ? '✓ Подтверждён' : '⏳ На проверке'}`
-).join('\n')}
-` : ''}
+═══════════════════════════════════════════════════════════════════════════════════
+                            ПЕРЕЧЕНЬ ВЫПОЛНЕННЫХ РАБОТ
+═══════════════════════════════════════════════════════════════════════════════════
 
-═══════════════════════════════════════════════════════════
-           Документ сформирован автоматически
-              SnowForce Moscow Dispatch © 2025
-═══════════════════════════════════════════════════════════
-    `;
+┌──────────────────────────────────────┬────────────┬────────────┬───────────────┐
+│ Наименование услуги                  │   Ед.изм.  │  Кол-во    │    Сумма      │
+├──────────────────────────────────────┼────────────┼────────────┼───────────────┤
+${order.assetRequirements.map(req => {
+  const qty = req.type === AssetType.TRUCK ? totals.totalTrips : req.plannedUnits;
+  const sum = (req.customerPrice || 0) * qty;
+  const name = req.type === AssetType.TRUCK ? 'Вывоз снега самосвалом' :
+               req.type === AssetType.LOADER ? 'Работа погрузчика' : 'Работа мини-погрузчика';
+  const unit = req.type === AssetType.TRUCK ? 'рейс' : 'смена';
+  return `│ ${name.padEnd(36)} │ ${unit.padEnd(10)} │ ${String(qty).padStart(10)} │ ${formatPrice(sum).padStart(13)} │`;
+}).join('\n')}
+├──────────────────────────────────────┴────────────┴────────────┼───────────────┤
+│                                                        ИТОГО:  │ ${formatPrice(totals.grandTotal).padStart(13)} │
+└────────────────────────────────────────────────────────────────┴───────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════════
+                                РЕЕСТР РЕЙСОВ
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌─────┬─────────────────────┬────────────────────┬───────────┬──────────────────┐
+│  №  │    Дата/Время       │      Водитель      │   GPS     │     Статус       │
+├─────┼─────────────────────┼────────────────────┼───────────┼──────────────────┤
+${confirmedEvidences.map((ev, i) => {
+  const gps = ev.coordinates ? '✓' : '—';
+  return `│ ${String(i + 1).padStart(3)} │ ${formatDateTime(ev.timestamp).padEnd(19)} │ ${(ev.driverName || '').slice(0, 18).padEnd(18)} │ ${gps.padStart(9)} │ ${'Подтверждён'.padEnd(16)} │`;
+}).join('\n')}
+└─────┴─────────────────────┴────────────────────┴───────────┴──────────────────┘
+
+Всего подтверждённых рейсов: ${confirmedEvidences.length}
+
+═══════════════════════════════════════════════════════════════════════════════════
+
+Вышеперечисленные работы выполнены полностью и в срок.
+Заказчик претензий по объёму, качеству и срокам оказания услуг не имеет.
+
+ИСПОЛНИТЕЛЬ:                                    ЗАКАЗЧИК:
+
+___________________ / _______________           ___________________ / _______________
+        подпись              ФИО                       подпись              ФИО
+
+М.П.                                            М.П.
+
+═══════════════════════════════════════════════════════════════════════════════════
+                    Документ сформирован автоматически
+                       SnowForce Moscow Dispatch © 2025
+═══════════════════════════════════════════════════════════════════════════════════
+`;
+    } else if (type === 'invoice') {
+      // СЧЁТ НА ОПЛАТУ
+      reportContent = `
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                ║
+║                            СЧЁТ НА ОПЛАТУ                                      ║
+║                              № ${docNumber.padEnd(20)}                         ║
+║                                                                                ║
+╠════════════════════════════════════════════════════════════════════════════════╣
+║  Дата: ${docDate.padEnd(70)}║
+╠════════════════════════════════════════════════════════════════════════════════╣
+
+ПОЛУЧАТЕЛЬ ПЛАТЕЖА:
+───────────────────────────────────────────────────────────────────────────────────
+  ООО "СНОУФОРС"
+  ИНН: 7700000000 / КПП: 770001001
+
+  Банк получателя: ПАО "СБЕРБАНК"
+  БИК: 044525225
+  Корр. счёт: 30101810400000000225
+  Расч. счёт: 40702810938000000001
+───────────────────────────────────────────────────────────────────────────────────
+
+ПЛАТЕЛЬЩИК:
+───────────────────────────────────────────────────────────────────────────────────
+  ${order.customer || 'Не указан'}
+  ${order.contactInfo?.inn ? `ИНН: ${order.contactInfo.inn}` : ''}
+  Тел: ${order.contactInfo?.phone || 'Не указан'}
+───────────────────────────────────────────────────────────────────────────────────
+
+ОСНОВАНИЕ: Услуги по вывозу снега
+ОБЪЕКТ: ${order.address || 'Не указан'}
+ЗАКАЗ №: ${order.orderNumber || order.id}
+
+═══════════════════════════════════════════════════════════════════════════════════
+                                    УСЛУГИ
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌────┬────────────────────────────────────┬────────┬──────────┬─────────────────┐
+│ №  │ Наименование                       │ Кол-во │   Цена   │      Сумма      │
+├────┼────────────────────────────────────┼────────┼──────────┼─────────────────┤
+${order.assetRequirements.map((req, i) => {
+  const qty = req.type === AssetType.TRUCK ? totals.totalTrips : req.plannedUnits;
+  const sum = (req.customerPrice || 0) * qty;
+  const name = req.type === AssetType.TRUCK ? 'Вывоз снега (самосвал)' :
+               req.type === AssetType.LOADER ? 'Погрузка (погрузчик)' : 'Погрузка (мини-погрузчик)';
+  return `│ ${String(i + 1).padStart(2)} │ ${name.padEnd(34)} │ ${String(qty).padStart(6)} │ ${formatPrice(req.customerPrice || 0).padStart(8)} │ ${formatPrice(sum).padStart(15)} │`;
+}).join('\n')}
+├────┴────────────────────────────────────┴────────┴──────────┼─────────────────┤
+│                                                      ИТОГО: │ ${formatPrice(totals.grandTotal).padStart(15)} │
+├─────────────────────────────────────────────────────────────┼─────────────────┤
+│                                               В т.ч. НДС 0%:│             0 ₽ │
+├─────────────────────────────────────────────────────────────┼─────────────────┤
+│                                             ВСЕГО К ОПЛАТЕ: │ ${formatPrice(totals.grandTotal).padStart(15)} │
+└─────────────────────────────────────────────────────────────┴─────────────────┘
+
+Всего наименований: ${order.assetRequirements.length}
+Сумма прописью: ${numberToWords(totals.grandTotal)} рублей 00 копеек.
+
+───────────────────────────────────────────────────────────────────────────────────
+ВНИМАНИЕ! Оплата данного счёта означает согласие с условиями оказания услуг.
+Срок оплаты: 5 банковских дней с даты выставления счёта.
+───────────────────────────────────────────────────────────────────────────────────
+
+Руководитель: ___________________ / Иванов И.И.
+
+Бухгалтер:    ___________________ / Петрова П.П.
+
+                                                                           М.П.
+
+═══════════════════════════════════════════════════════════════════════════════════
+                    Документ сформирован автоматически
+                       SnowForce Moscow Dispatch © 2025
+═══════════════════════════════════════════════════════════════════════════════════
+`;
+    } else if (type === 'upd') {
+      // УПД (Универсальный передаточный документ)
+      reportContent = `
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                ║
+║              УНИВЕРСАЛЬНЫЙ ПЕРЕДАТОЧНЫЙ ДОКУМЕНТ (УПД)                         ║
+║                              № ${docNumber.padEnd(20)}                         ║
+║                              Статус: 1 (счёт-фактура + акт)                    ║
+║                                                                                ║
+╠════════════════════════════════════════════════════════════════════════════════╣
+║  Дата составления: ${docDate.padEnd(58)}║
+╠════════════════════════════════════════════════════════════════════════════════╣
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│ 1. ПРОДАВЕЦ (ИСПОЛНИТЕЛЬ):                                                    │
+├───────────────────────────────────────────────────────────────────────────────┤
+│ ООО "СНОУФОРС"                                                                │
+│ ИНН: 7700000000 / КПП: 770001001                                              │
+│ Адрес: 123456, г. Москва, ул. Снежная, д. 1                                   │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│ 2. ПОКУПАТЕЛЬ (ЗАКАЗЧИК):                                                     │
+├───────────────────────────────────────────────────────────────────────────────┤
+│ ${(order.customer || 'Не указан').padEnd(75)}│
+│ ${order.contactInfo?.inn ? `ИНН: ${order.contactInfo.inn}`.padEnd(75) : ''.padEnd(75)}│
+│ Тел: ${(order.contactInfo?.phone || 'Не указан').padEnd(69)}│
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│ 3. ОСНОВАНИЕ ПЕРЕДАЧИ/ПОЛУЧЕНИЯ:                                              │
+├───────────────────────────────────────────────────────────────────────────────┤
+│ Договор оказания услуг по вывозу снега                                        │
+│ Заказ №: ${(order.orderNumber || order.id).padEnd(65)}│
+│ Объект: ${(order.address || 'Не указан').slice(0, 65).padEnd(65)}│
+└───────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════════
+                              ТАБЛИЦА УСЛУГ
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌────┬────────────────────────────┬────────┬────────┬──────────┬─────────────────┐
+│ №  │ Наименование товара/услуги │ Ед.изм │ Кол-во │   Цена   │   Стоимость     │
+│    │                            │        │        │  без НДС │    без НДС      │
+├────┼────────────────────────────┼────────┼────────┼──────────┼─────────────────┤
+${order.assetRequirements.map((req, i) => {
+  const qty = req.type === AssetType.TRUCK ? totals.totalTrips : req.plannedUnits;
+  const sum = (req.customerPrice || 0) * qty;
+  const name = req.type === AssetType.TRUCK ? 'Вывоз снега самосвалом' :
+               req.type === AssetType.LOADER ? 'Работа погрузчика' : 'Работа мини-погрузчика';
+  const unit = req.type === AssetType.TRUCK ? 'рейс' : 'смена';
+  return `│ ${String(i + 1).padStart(2)} │ ${name.slice(0, 26).padEnd(26)} │ ${unit.padEnd(6)} │ ${String(qty).padStart(6)} │ ${formatPrice(req.customerPrice || 0).padStart(8)} │ ${formatPrice(sum).padStart(15)} │`;
+}).join('\n')}
+├────┴────────────────────────────┴────────┴────────┼──────────┼─────────────────┤
+│                                           ВСЕГО:  │   Без НДС│ ${formatPrice(totals.grandTotal).padStart(15)} │
+├───────────────────────────────────────────────────┼──────────┼─────────────────┤
+│                                              НДС: │       0% │             0 ₽ │
+├───────────────────────────────────────────────────┼──────────┼─────────────────┤
+│                                  ВСЕГО С УЧЁТОМ НДС:         │ ${formatPrice(totals.grandTotal).padStart(15)} │
+└───────────────────────────────────────────────────┴──────────┴─────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════════
+                           ПОДПИСИ СТОРОН
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────┬─────────────────────────────────────────┐
+│ ПРОДАВЕЦ (ИСПОЛНИТЕЛЬ):             │ ПОКУПАТЕЛЬ (ЗАКАЗЧИК):                  │
+├─────────────────────────────────────┼─────────────────────────────────────────┤
+│                                     │                                         │
+│ Товар (услуги) передал / работы     │ Товар (услуги) получил / работы принял  │
+│ сдал:                               │                                         │
+│                                     │                                         │
+│ _______________ / _______________   │ _______________ / _______________       │
+│    подпись          ФИО             │    подпись          ФИО                 │
+│                                     │                                         │
+│ Дата: ______________                │ Дата: ______________                    │
+│                                     │                                         │
+│          М.П.                       │          М.П.                           │
+└─────────────────────────────────────┴─────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════════
+                    Документ сформирован автоматически
+                       SnowForce Moscow Dispatch © 2025
+═══════════════════════════════════════════════════════════════════════════════════
+`;
+    } else if (type === 'contract') {
+      // ДОГОВОР
+      reportContent = `
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                ║
+║                  ДОГОВОР ОКАЗАНИЯ УСЛУГ ПО ВЫВОЗУ СНЕГА                        ║
+║                              № ${docNumber.padEnd(20)}                         ║
+║                                                                                ║
+╠════════════════════════════════════════════════════════════════════════════════╣
+║  г. Москва                                            ${docDate.padEnd(24)}║
+╠════════════════════════════════════════════════════════════════════════════════╣
+
+ООО "СНОУФОРС", именуемое в дальнейшем "Исполнитель", в лице Генерального
+директора Иванова И.И., действующего на основании Устава, с одной стороны, и
+
+${order.customer || 'Заказчик'}, именуемый в дальнейшем "Заказчик",
+${order.contactInfo?.inn ? `ИНН: ${order.contactInfo.inn}, ` : ''}в лице _________________________________,
+действующего на основании _________________, с другой стороны,
+
+вместе именуемые "Стороны", заключили настоящий Договор о нижеследующем:
+
+═══════════════════════════════════════════════════════════════════════════════════
+                         1. ПРЕДМЕТ ДОГОВОРА
+═══════════════════════════════════════════════════════════════════════════════════
+
+1.1. Исполнитель обязуется оказать услуги по механизированной уборке и вывозу
+     снега с территории Заказчика, а Заказчик обязуется принять и оплатить
+     оказанные услуги.
+
+1.2. Адрес объекта: ${order.address || 'Не указан'}
+
+1.3. Объём работ определяется по факту выполнения согласно реестру рейсов.
+
+═══════════════════════════════════════════════════════════════════════════════════
+                         2. СТОИМОСТЬ УСЛУГ
+═══════════════════════════════════════════════════════════════════════════════════
+
+${order.assetRequirements.map((req, i) => {
+  const name = req.type === AssetType.TRUCK ? 'Вывоз снега самосвалом' :
+               req.type === AssetType.LOADER ? 'Работа погрузчика' : 'Работа мини-погрузчика';
+  const unit = req.type === AssetType.TRUCK ? 'за рейс' : 'за смену';
+  return `2.${i + 2}. ${name}: ${formatPrice(req.customerPrice || 0)} ${unit}`;
+}).join('\n')}
+
+2.${order.assetRequirements.length + 2}. НДС не облагается в соответствии с п. 2 ст. 346.11 НК РФ
+     (применение УСН).
+
+═══════════════════════════════════════════════════════════════════════════════════
+                         3. ПОРЯДОК РАСЧЁТОВ
+═══════════════════════════════════════════════════════════════════════════════════
+
+3.1. Оплата производится Заказчиком в течение 5 (пяти) банковских дней с момента
+     подписания Акта выполненных работ.
+
+3.2. Оплата производится путём перечисления денежных средств на расчётный счёт
+     Исполнителя.
+
+═══════════════════════════════════════════════════════════════════════════════════
+                         4. ПОРЯДОК СДАЧИ-ПРИЁМКИ УСЛУГ
+═══════════════════════════════════════════════════════════════════════════════════
+
+4.1. По завершении работ Исполнитель предоставляет Заказчику:
+     - Акт выполненных работ
+     - Реестр рейсов с фотофиксацией
+     - Счёт на оплату
+
+4.2. Заказчик обязан подписать Акт выполненных работ или направить мотивированный
+     отказ в течение 3 (трёх) рабочих дней.
+
+═══════════════════════════════════════════════════════════════════════════════════
+                         5. РЕКВИЗИТЫ СТОРОН
+═══════════════════════════════════════════════════════════════════════════════════
+
+ИСПОЛНИТЕЛЬ:                              ЗАКАЗЧИК:
+
+ООО "СНОУФОРС"                            ${order.customer || ''}
+ИНН: 7700000000                           ${order.contactInfo?.inn ? `ИНН: ${order.contactInfo.inn}` : ''}
+КПП: 770001001
+Банк: ПАО "СБЕРБАНК"                      Тел: ${order.contactInfo?.phone || ''}
+БИК: 044525225                            Email: ${order.contactInfo?.email || ''}
+Р/с: 40702810938000000001
+
+Генеральный директор:                     ___________________________________
+
+_______________ / Иванов И.И.             _______________ / _______________
+
+          М.П.                                        М.П.
+
+═══════════════════════════════════════════════════════════════════════════════════
+                    Документ сформирован автоматически
+                       SnowForce Moscow Dispatch © 2025
+═══════════════════════════════════════════════════════════════════════════════════
+`;
+    } else {
+      // ПОЛНЫЙ ОТЧЁТ
+      reportContent = `
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                ║
+║                           ПОЛНЫЙ ОТЧЁТ ПО ЗАКАЗУ                               ║
+║                              № ${(order.orderNumber || order.id).padEnd(20)}   ║
+║                                                                                ║
+╠════════════════════════════════════════════════════════════════════════════════╣
+║  Дата формирования: ${docDate.padEnd(57)}║
+╠════════════════════════════════════════════════════════════════════════════════╣
+
+═══════════════════════════════════════════════════════════════════════════════════
+                              ОБЩАЯ ИНФОРМАЦИЯ
+═══════════════════════════════════════════════════════════════════════════════════
+
+  Номер заказа:     ${order.orderNumber || order.id}
+  Статус:           ${order.status}
+  Менеджер:         ${order.managerName || 'Не назначен'}
+
+═══════════════════════════════════════════════════════════════════════════════════
+                                 ЗАКАЗЧИК
+═══════════════════════════════════════════════════════════════════════════════════
+
+  Наименование:     ${order.customer || 'Не указан'}
+  ${order.contactInfo?.inn ? `ИНН:               ${order.contactInfo.inn}` : ''}
+  Телефон:          ${order.contactInfo?.phone || 'Не указан'}
+  Email:            ${order.contactInfo?.email || 'Не указан'}
+
+═══════════════════════════════════════════════════════════════════════════════════
+                                  ОБЪЕКТ
+═══════════════════════════════════════════════════════════════════════════════════
+
+  Адрес:            ${order.address || 'Не указан'}
+  Район:            ${order.district || 'Не указан'}
+  ${order.coordinates ? `Координаты:        ${order.coordinates[0]}, ${order.coordinates[1]}` : ''}
+
+  Ограничения:
+  ${order.restrictions?.hasHeightLimit ? `  - Ограничение высоты: ${order.restrictions.heightLimitMeters || '?'} м` : ''}
+  ${order.restrictions?.hasNarrowEntrance ? `  - Узкий проезд: ${order.restrictions.entranceWidthMeters || '?'} м` : ''}
+  ${order.restrictions?.hasPermitRegime ? `  - Пропускной режим: ${order.restrictions.permitDetails || 'Да'}` : ''}
+  ${order.restrictions?.isNightWorkProhibited ? '  - Ночные работы запрещены' : ''}
+
+═══════════════════════════════════════════════════════════════════════════════════
+                              ПЕРИОД РАБОТ
+═══════════════════════════════════════════════════════════════════════════════════
+
+  Начало:           ${formatDateTime(order.scheduledTime)}
+  ${order.startedAt ? `Фактическое начало: ${formatDateTime(order.startedAt)}` : ''}
+  ${order.completedAt ? `Завершение:         ${formatDateTime(order.completedAt)}` : ''}
+
+═══════════════════════════════════════════════════════════════════════════════════
+                              ТЕХНИКА И РАСЦЕНКИ
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌──────────────────────────┬────────────┬────────────┬────────────┬──────────────┐
+│ Тип техники              │   Ед.изм   │  Кол-во    │    Цена    │    Итого     │
+├──────────────────────────┼────────────┼────────────┼────────────┼──────────────┤
+${order.assetRequirements.map(req => {
+  const qty = req.type === AssetType.TRUCK ? totals.totalTrips : req.plannedUnits;
+  const sum = (req.customerPrice || 0) * qty;
+  const unit = req.type === AssetType.TRUCK ? 'рейс' : 'смена';
+  return `│ ${req.type.padEnd(24)} │ ${unit.padEnd(10)} │ ${String(qty).padStart(10)} │ ${formatPrice(req.customerPrice || 0).padStart(10)} │ ${formatPrice(sum).padStart(12)} │`;
+}).join('\n')}
+├──────────────────────────┴────────────┴────────────┴────────────┼──────────────┤
+│                                                          ИТОГО: │ ${formatPrice(totals.grandTotal).padStart(12)} │
+└─────────────────────────────────────────────────────────────────┴──────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════════
+                               СТАТИСТИКА
+═══════════════════════════════════════════════════════════════════════════════════
+
+  Плановых рейсов:        ${order.plannedTrips || 0}
+  Выполнено рейсов:       ${(order.evidences || []).length}
+  Подтверждено рейсов:    ${confirmedEvidences.length}
+  На проверке:            ${(order.evidences || []).length - confirmedEvidences.length}
+
+═══════════════════════════════════════════════════════════════════════════════════
+                              РЕЕСТР РЕЙСОВ
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌─────┬─────────────────────┬──────────────────────┬────────────┬────────────────┐
+│  №  │    Дата/Время       │       Водитель       │    GPS     │     Статус     │
+├─────┼─────────────────────┼──────────────────────┼────────────┼────────────────┤
+${(order.evidences || []).map((ev, i) => {
+  const gps = ev.coordinates ? `${ev.coordinates.latitude.toFixed(4)},${ev.coordinates.longitude.toFixed(4)}` : '—';
+  const status = ev.confirmed ? 'Подтверждён' : ev.rejectionReason ? 'Отклонён' : 'На проверке';
+  return `│ ${String(i + 1).padStart(3)} │ ${formatDateTime(ev.timestamp).padEnd(19)} │ ${(ev.driverName || '').slice(0, 20).padEnd(20)} │ ${gps.padStart(10)} │ ${status.padEnd(14)} │`;
+}).join('\n') || '│                              Рейсы отсутствуют                              │'}
+└─────┴─────────────────────┴──────────────────────┴────────────┴────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════════
+                           НАЗНАЧЕННАЯ ТЕХНИКА
+═══════════════════════════════════════════════════════════════════════════════════
+
+${(order.driverDetails || []).map((d, i) => `
+  ${i + 1}. ${d.driverName || 'Водитель'}
+     Тип: ${d.assetType}
+     Статус: ${d.status || 'Назначен'}
+     ${d.assignedAt ? `Назначен: ${formatDateTime(d.assignedAt)}` : ''}
+`).join('') || '  Техника не назначена'}
+
+═══════════════════════════════════════════════════════════════════════════════════
+                           ИСТОРИЯ ДЕЙСТВИЙ
+═══════════════════════════════════════════════════════════════════════════════════
+
+${(order.actionLog || []).slice(-10).map(log =>
+  `  ${formatDateTime(log.timestamp)} | ${log.performedBy} | ${log.action}`
+).join('\n') || '  История пуста'}
+
+═══════════════════════════════════════════════════════════════════════════════════
+                    Документ сформирован автоматически
+                       SnowForce Moscow Dispatch © 2025
+═══════════════════════════════════════════════════════════════════════════════════
+`;
+    }
 
     // Создаём и скачиваем файл
     const blob = new Blob([reportContent], { type: 'text/plain;charset=utf-8' });
@@ -214,21 +618,242 @@ ${(order.evidences || []).map((ev, i) =>
     URL.revokeObjectURL(url);
 
     setIsProcessingDoc(null);
-    setShareStatus(`✅ Документ "${type}" успешно сформирован и загружен.`);
+
+    const docNames: Record<string, string> = {
+      act: 'Акт выполненных работ',
+      invoice: 'Счёт на оплату',
+      upd: 'УПД',
+      contract: 'Договор',
+      full: 'Полный отчёт'
+    };
+
+    setShareStatus(`✅ ${docNames[type]} успешно сформирован и загружен.`);
     setTimeout(() => setShareStatus(null), 3000);
   }, [calculateOrderTotals]);
 
-  // Скачивание архива фото
+  // Вспомогательная функция для преобразования числа в слова
+  const numberToWords = (num: number): string => {
+    if (num === 0) return 'Ноль';
+    const units = ['', 'одна', 'две', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять'];
+    const teens = ['десять', 'одиннадцать', 'двенадцать', 'тринадцать', 'четырнадцать', 'пятнадцать', 'шестнадцать', 'семнадцать', 'восемнадцать', 'девятнадцать'];
+    const tens = ['', '', 'двадцать', 'тридцать', 'сорок', 'пятьдесят', 'шестьдесят', 'семьдесят', 'восемьдесят', 'девяносто'];
+    const hundreds = ['', 'сто', 'двести', 'триста', 'четыреста', 'пятьсот', 'шестьсот', 'семьсот', 'восемьсот', 'девятьсот'];
+    const thousands = ['', 'тысяча', 'тысячи', 'тысяч'];
+
+    if (num >= 1000000) return formatPrice(num).replace(' ₽', '');
+
+    let result = '';
+    const th = Math.floor(num / 1000);
+    const h = Math.floor((num % 1000) / 100);
+    const t = Math.floor((num % 100) / 10);
+    const u = num % 10;
+
+    if (th > 0) {
+      if (th === 1) result += 'одна тысяча ';
+      else if (th === 2) result += 'две тысячи ';
+      else if (th >= 3 && th <= 4) result += units[th] + ' тысячи ';
+      else result += units[th] + ' тысяч ';
+    }
+
+    if (h > 0) result += hundreds[h] + ' ';
+
+    if (t === 1) {
+      result += teens[u] + ' ';
+    } else {
+      if (t > 1) result += tens[t] + ' ';
+      if (u > 0) result += units[u] + ' ';
+    }
+
+    return result.trim() || 'Ноль';
+  };
+
+  // Скачивание фото - HTML страница с галереей
   const downloadPhotos = useCallback(async (order: Order) => {
     setIsProcessingDoc('photos');
-    
-    // В реальном приложении здесь был бы zip-архив
-    // Пока просто показываем уведомление
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
+
+    const evidences = order.evidences || [];
+    if (evidences.length === 0) {
+      setIsProcessingDoc(null);
+      setShareStatus('📸 Нет фотографий для скачивания');
+      setTimeout(() => setShareStatus(null), 3000);
+      return;
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Создаём HTML страницу с галереей фото
+    const htmlContent = `
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Фотоотчёт - Заказ ${order.orderNumber || order.id}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0f1d;
+      color: white;
+      padding: 20px;
+      min-height: 100vh;
+    }
+    .header {
+      text-align: center;
+      padding: 40px 20px;
+      background: linear-gradient(135deg, #1e3a8a, #3b82f6);
+      border-radius: 20px;
+      margin-bottom: 30px;
+    }
+    .header h1 { font-size: 28px; margin-bottom: 10px; }
+    .header p { opacity: 0.8; font-size: 14px; }
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-bottom: 30px;
+    }
+    .info-card {
+      background: #12192c;
+      padding: 20px;
+      border-radius: 15px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .info-card label { font-size: 10px; text-transform: uppercase; opacity: 0.5; display: block; margin-bottom: 5px; }
+    .info-card span { font-size: 16px; font-weight: bold; }
+    .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
+    .photo-card {
+      background: #12192c;
+      border-radius: 20px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .photo-card img {
+      width: 100%;
+      height: 250px;
+      object-fit: cover;
+      cursor: pointer;
+      transition: transform 0.3s;
+    }
+    .photo-card img:hover { transform: scale(1.02); }
+    .photo-info { padding: 15px; }
+    .photo-info h3 { font-size: 14px; margin-bottom: 5px; }
+    .photo-info p { font-size: 12px; opacity: 0.6; }
+    .photo-info .status {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 10px;
+      font-weight: bold;
+      text-transform: uppercase;
+      margin-top: 10px;
+    }
+    .status.confirmed { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+    .status.pending { background: rgba(249, 115, 22, 0.2); color: #f97316; }
+    .footer {
+      text-align: center;
+      padding: 40px;
+      opacity: 0.5;
+      font-size: 12px;
+    }
+    .download-btn {
+      display: inline-block;
+      background: #3b82f6;
+      color: white;
+      padding: 10px 20px;
+      border-radius: 10px;
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: bold;
+      margin-top: 10px;
+    }
+    @media print {
+      body { background: white; color: black; }
+      .photo-card { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>ФОТООТЧЁТ</h1>
+    <p>SnowForce Moscow Dispatch</p>
+  </div>
+
+  <div class="info-grid">
+    <div class="info-card">
+      <label>Заказ</label>
+      <span>#${order.orderNumber || order.id}</span>
+    </div>
+    <div class="info-card">
+      <label>Объект</label>
+      <span>${order.address || 'Не указан'}</span>
+    </div>
+    <div class="info-card">
+      <label>Заказчик</label>
+      <span>${order.customer || 'Не указан'}</span>
+    </div>
+    <div class="info-card">
+      <label>Всего рейсов</label>
+      <span>${evidences.length}</span>
+    </div>
+  </div>
+
+  <div class="gallery">
+    ${evidences.map((ev, i) => {
+      const photos = ev.photos || [];
+      const mainPhoto = photos[0]?.url || '';
+      const status = ev.confirmed ? 'confirmed' : 'pending';
+      const statusText = ev.confirmed ? 'Подтверждён' : 'На проверке';
+
+      return `
+        <div class="photo-card">
+          ${mainPhoto ? `<img src="${mainPhoto}" alt="Рейс ${i + 1}" onclick="window.open(this.src)">` : '<div style="height:250px;background:#1c2641;display:flex;align-items:center;justify-content:center;opacity:0.3;">Нет фото</div>'}
+          <div class="photo-info">
+            <h3>Рейс #${ev.tripNumber || i + 1}</h3>
+            <p>Водитель: ${ev.driverName || 'Не указан'}</p>
+            <p>Время: ${new Date(ev.timestamp).toLocaleString('ru')}</p>
+            ${ev.coordinates ? `<p>GPS: ${ev.coordinates.latitude.toFixed(5)}, ${ev.coordinates.longitude.toFixed(5)}</p>` : ''}
+            <p>Фото в рейсе: ${photos.length}</p>
+            <span class="status ${status}">${statusText}</span>
+            ${photos.length > 1 ? `<br><small style="opacity:0.5;font-size:10px;">+ ещё ${photos.length - 1} фото</small>` : ''}
+          </div>
+        </div>
+      `;
+    }).join('')}
+  </div>
+
+  <div class="footer">
+    <p>Документ сформирован: ${new Date().toLocaleString('ru')}</p>
+    <p>SnowForce Moscow Dispatch © 2025</p>
+  </div>
+</body>
+</html>
+    `;
+
+    // Скачиваем HTML файл
+    const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `snowforce_photos_${order.orderNumber || order.id}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
     setIsProcessingDoc(null);
-    setShareStatus(`📸 Фотоархив содержит ${(order.evidences || []).length} фото. Функция в разработке.`);
-    setTimeout(() => setShareStatus(null), 4000);
+    setShareStatus(`📸 Фотоотчёт (${evidences.length} рейсов) успешно скачан!`);
+    setTimeout(() => setShareStatus(null), 3000);
+  }, []);
+
+  // Скачивание отдельного фото
+  const downloadSinglePhoto = useCallback((photoUrl: string, filename: string) => {
+    const a = document.createElement('a');
+    a.href = photoUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }, []);
 
   // Отправка в мессенджеры
@@ -489,47 +1114,132 @@ ${(order.evidences || []).map((ev, i) =>
                       </div>
                     </div>
 
-                    {/* Блок подтверждения (если нужно) */}
+                    {/* Блок подтверждения КП (улучшенный) */}
                     {needsConfirmation && (
                       <div className="p-6 bg-gradient-to-r from-blue-600 to-blue-700 border-b border-white/10">
-                        <h3 className="text-lg font-black uppercase tracking-tight mb-2">💰 Расчёт готов</h3>
-                        
+                        <div className="flex justify-between items-start mb-4">
+                          <div>
+                            <h3 className="text-lg font-black uppercase tracking-tight">💰 Коммерческое предложение</h3>
+                            <p className="text-[10px] text-blue-200 mt-1">
+                              Менеджер: {order.managerName} • Действует до: {currentQuote?.validUntil ? new Date(currentQuote.validUntil).toLocaleDateString('ru') : '7 дней'}
+                            </p>
+                          </div>
+                          <span className="bg-white/20 text-white text-[8px] font-black px-3 py-1 rounded-full uppercase">
+                            Ожидает ответа
+                          </span>
+                        </div>
+
                         {currentQuote && (
-                          <div className="bg-white/10 rounded-2xl p-4 mb-4">
-                            <div className="grid grid-cols-2 gap-3 text-[10px]">
-                              {currentQuote.truckPricePerTrip && (
-                                <div>
-                                  <span className="text-blue-200">Самосвал:</span>
-                                  <span className="font-black ml-2">{formatPrice(currentQuote.truckPricePerTrip)}/рейс</span>
+                          <div className="bg-white/10 rounded-2xl p-4 mb-4 backdrop-blur">
+                            {/* Детализация услуг */}
+                            <div className="space-y-2 mb-4">
+                              {currentQuote.truckPricePerTrip > 0 && (
+                                <div className="flex justify-between items-center py-2 border-b border-white/10">
+                                  <div className="flex items-center gap-2">
+                                    <span>🚛</span>
+                                    <div>
+                                      <div className="text-sm font-bold">Самосвал</div>
+                                      <div className="text-[9px] text-blue-200">{formatPrice(currentQuote.truckPricePerTrip)}/рейс × {order.plannedTrips || 0} рейсов</div>
+                                    </div>
+                                  </div>
+                                  <span className="font-black">{formatPrice((currentQuote.truckPricePerTrip || 0) * (order.plannedTrips || 0))}</span>
                                 </div>
                               )}
-                              {currentQuote.loaderPricePerShift && (
-                                <div>
-                                  <span className="text-blue-200">Погрузчик:</span>
-                                  <span className="font-black ml-2">{formatPrice(currentQuote.loaderPricePerShift)}/смена</span>
+                              {currentQuote.loaderPricePerShift > 0 && (
+                                <div className="flex justify-between items-center py-2 border-b border-white/10">
+                                  <div className="flex items-center gap-2">
+                                    <span>🚜</span>
+                                    <div>
+                                      <div className="text-sm font-bold">Погрузчик</div>
+                                      <div className="text-[9px] text-blue-200">{formatPrice(currentQuote.loaderPricePerShift)}/смена</div>
+                                    </div>
+                                  </div>
+                                  <span className="font-black">{formatPrice(currentQuote.loaderPricePerShift)}</span>
+                                </div>
+                              )}
+                              {(currentQuote.deliveryCharge || 0) > 0 && (
+                                <div className="flex justify-between items-center py-2 border-b border-white/10 text-[11px]">
+                                  <span className="text-blue-200">🚚 Подача техники</span>
+                                  <span className="font-bold">{formatPrice(currentQuote.deliveryCharge || 0)}</span>
+                                </div>
+                              )}
+                              {(currentQuote.minimalCharge || 0) > 0 && (
+                                <div className="flex justify-between items-center py-2 border-b border-white/10 text-[11px]">
+                                  <span className="text-blue-200">📋 Минимальный заказ</span>
+                                  <span className="font-bold">{formatPrice(currentQuote.minimalCharge || 0)}</span>
                                 </div>
                               )}
                             </div>
-                            <div className="mt-3 pt-3 border-t border-white/20 flex justify-between items-center">
-                              <span className="text-[10px] uppercase opacity-80">Ориентировочно:</span>
-                              <span className="text-xl font-black">{formatPrice(currentQuote.estimatedTotal)}</span>
+
+                            {/* Итого */}
+                            <div className="flex justify-between items-center pt-2">
+                              <span className="text-sm uppercase font-bold">Итого к оплате:</span>
+                              <span className="text-2xl font-black">{formatPrice(currentQuote.estimatedTotal)}</span>
                             </div>
+
+                            {currentQuote.notes && (
+                              <div className="mt-3 pt-3 border-t border-white/20 text-[10px] text-blue-100">
+                                <span className="font-bold">Примечание:</span> {currentQuote.notes}
+                              </div>
+                            )}
                           </div>
                         )}
 
                         <div className="flex gap-3">
-                          <button 
+                          <button
                             onClick={() => handleConfirmOrder(order.id)}
                             className="flex-1 bg-white text-slate-900 py-4 rounded-2xl text-[11px] font-black uppercase tracking-widest shadow-xl hover:scale-[1.02] transition-all"
                           >
                             ✅ Подтвердить условия
                           </button>
-                          <button 
+                          <button
                             onClick={() => handleConfirmOrder(order.id, true)}
                             className="bg-orange-500 text-white px-6 py-4 rounded-2xl text-[10px] font-black uppercase shadow-lg hover:bg-orange-400 transition-all"
                           >
                             🚀 СРОЧНО
                           </button>
+                        </div>
+
+                        <p className="text-[9px] text-blue-200 text-center mt-3 opacity-70">
+                          Нажимая "Подтвердить", вы соглашаетесь с условиями оказания услуг
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Галерея фото рейсов (если есть) */}
+                    {(order.evidences || []).length > 0 && !needsConfirmation && (
+                      <div className="p-4 bg-white/[0.02] border-b border-white/5">
+                        <div className="flex justify-between items-center mb-3">
+                          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                            Фото рейсов ({(order.evidences || []).length})
+                          </span>
+                          <button
+                            onClick={() => downloadPhotos(order)}
+                            className="text-[9px] font-bold text-blue-400 hover:text-blue-300"
+                          >
+                            Скачать все →
+                          </button>
+                        </div>
+                        <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
+                          {(order.evidences || []).slice(0, 8).map((ev, i) => (
+                            <div key={ev.id} className="relative shrink-0 group">
+                              <img
+                                src={ev.photos?.[0]?.url || ''}
+                                alt={`Рейс ${i + 1}`}
+                                className="w-20 h-20 object-cover rounded-xl border border-white/10"
+                              />
+                              <div className={`absolute bottom-0 left-0 right-0 text-center text-[7px] font-bold py-0.5 rounded-b-xl ${
+                                ev.confirmed ? 'bg-green-500 text-white' : 'bg-orange-500 text-white'
+                              }`}>
+                                #{ev.tripNumber || i + 1}
+                              </div>
+                            </div>
+                          ))}
+                          {(order.evidences || []).length > 8 && (
+                            <div className="w-20 h-20 bg-white/5 rounded-xl flex items-center justify-center text-[10px] font-bold text-slate-500 shrink-0">
+                              +{(order.evidences || []).length - 8}
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}
@@ -793,40 +1503,58 @@ ${(order.evidences || []).map((ev, i) =>
                       </div>
                     </div>
 
-                    {/* Документы */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-                      <button 
-                        onClick={() => generateReport(order, 'act')}
-                        disabled={isProcessingDoc === 'act'}
-                        className="bg-white/5 hover:bg-white/10 p-4 rounded-xl text-center transition-all border border-white/5 disabled:opacity-50"
-                      >
-                        <span className="text-2xl block mb-1">📄</span>
-                        <span className="text-[9px] font-black uppercase">{isProcessingDoc === 'act' ? 'Генерация...' : 'Акт'}</span>
-                      </button>
-                      <button 
-                        onClick={() => generateReport(order, 'invoice')}
-                        disabled={isProcessingDoc === 'invoice'}
-                        className="bg-white/5 hover:bg-white/10 p-4 rounded-xl text-center transition-all border border-white/5 disabled:opacity-50"
-                      >
-                        <span className="text-2xl block mb-1">🧾</span>
-                        <span className="text-[9px] font-black uppercase">{isProcessingDoc === 'invoice' ? 'Генерация...' : 'Счёт'}</span>
-                      </button>
-                      <button 
-                        onClick={() => generateReport(order, 'full')}
-                        disabled={isProcessingDoc === 'full'}
-                        className="bg-white/5 hover:bg-white/10 p-4 rounded-xl text-center transition-all border border-white/5 disabled:opacity-50"
-                      >
-                        <span className="text-2xl block mb-1">📊</span>
-                        <span className="text-[9px] font-black uppercase">{isProcessingDoc === 'full' ? 'Генерация...' : 'Полный отчёт'}</span>
-                      </button>
-                      <button 
-                        onClick={() => downloadPhotos(order)}
-                        disabled={isProcessingDoc === 'photos'}
-                        className="bg-white/5 hover:bg-white/10 p-4 rounded-xl text-center transition-all border border-white/5 disabled:opacity-50"
-                      >
-                        <span className="text-2xl block mb-1">📸</span>
-                        <span className="text-[9px] font-black uppercase">{isProcessingDoc === 'photos' ? 'Сборка...' : 'Фото ({(order.evidences || []).length})'}</span>
-                      </button>
+                    {/* Закрывающие документы - улучшенная версия */}
+                    <div className="mb-6">
+                      <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">
+                        Закрывающие документы
+                      </h4>
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                        <button
+                          onClick={() => generateReport(order, 'act')}
+                          disabled={!!isProcessingDoc}
+                          className="bg-white/5 hover:bg-green-500/20 hover:border-green-500/30 p-4 rounded-xl text-center transition-all border border-white/5 disabled:opacity-50"
+                        >
+                          <span className="text-2xl block mb-1">📄</span>
+                          <span className="text-[9px] font-black uppercase">{isProcessingDoc === 'act' ? 'Генерация...' : 'Акт'}</span>
+                        </button>
+                        <button
+                          onClick={() => generateReport(order, 'invoice')}
+                          disabled={!!isProcessingDoc}
+                          className="bg-white/5 hover:bg-blue-500/20 hover:border-blue-500/30 p-4 rounded-xl text-center transition-all border border-white/5 disabled:opacity-50"
+                        >
+                          <span className="text-2xl block mb-1">🧾</span>
+                          <span className="text-[9px] font-black uppercase">{isProcessingDoc === 'invoice' ? 'Генерация...' : 'Счёт'}</span>
+                        </button>
+                        <button
+                          onClick={() => generateReport(order, 'upd')}
+                          disabled={!!isProcessingDoc}
+                          className="bg-white/5 hover:bg-purple-500/20 hover:border-purple-500/30 p-4 rounded-xl text-center transition-all border border-white/5 disabled:opacity-50"
+                        >
+                          <span className="text-2xl block mb-1">📋</span>
+                          <span className="text-[9px] font-black uppercase">{isProcessingDoc === 'upd' ? 'Генерация...' : 'УПД'}</span>
+                        </button>
+                        <button
+                          onClick={() => generateReport(order, 'full')}
+                          disabled={!!isProcessingDoc}
+                          className="bg-white/5 hover:bg-orange-500/20 hover:border-orange-500/30 p-4 rounded-xl text-center transition-all border border-white/5 disabled:opacity-50"
+                        >
+                          <span className="text-2xl block mb-1">📊</span>
+                          <span className="text-[9px] font-black uppercase">{isProcessingDoc === 'full' ? 'Генерация...' : 'Отчёт'}</span>
+                        </button>
+                        <button
+                          onClick={() => downloadPhotos(order)}
+                          disabled={!!isProcessingDoc}
+                          className="bg-white/5 hover:bg-cyan-500/20 hover:border-cyan-500/30 p-4 rounded-xl text-center transition-all border border-white/5 disabled:opacity-50 relative"
+                        >
+                          <span className="text-2xl block mb-1">📸</span>
+                          <span className="text-[9px] font-black uppercase">{isProcessingDoc === 'photos' ? 'Сборка...' : 'Фото'}</span>
+                          {(order.evidences || []).length > 0 && (
+                            <span className="absolute -top-1 -right-1 bg-cyan-500 text-white text-[8px] w-5 h-5 rounded-full flex items-center justify-center font-bold">
+                              {(order.evidences || []).length}
+                            </span>
+                          )}
+                        </button>
+                      </div>
                     </div>
 
                     {/* Поделиться */}

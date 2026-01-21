@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Order, OrderStatus, TripEvidence, Contractor, AssetType, DriverAssignment, formatPrice, formatDateTime, generateId } from '../types';
+import { Order, OrderStatus, TripEvidence, Contractor, AssetType, DriverAssignment, formatPrice, formatDateTime, generateId } from './types';
 
 interface DriverPortalProps {
   orders: Order[];
@@ -291,7 +291,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
       {/* CONTENT */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-40 no-scrollbar">
         
-        {/* Вкладка заработка */}
+        {/* Вкладка заработка - улучшенная */}
         {activeTab === 'earnings' && (
           <div className="space-y-4 animate-in fade-in">
             {/* Общая статистика */}
@@ -307,9 +307,45 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                   <div className="text-[9px] uppercase opacity-70">Предварительно</div>
                 </div>
               </div>
-              <div className="mt-4 pt-4 border-t border-white/20 flex justify-between">
-                <span className="text-[10px] uppercase">Рейсов: {earningsData.confirmedTrips} / {earningsData.totalTrips}</span>
-                <span className="text-[10px] uppercase">На проверке: {earningsData.totalTrips - earningsData.confirmedTrips}</span>
+
+              {/* Прогресс-бар */}
+              <div className="mt-4 pt-4 border-t border-white/20">
+                <div className="flex justify-between text-[9px] mb-2">
+                  <span>Подтверждено рейсов</span>
+                  <span>{earningsData.confirmedTrips} из {earningsData.totalTrips}</span>
+                </div>
+                <div className="w-full h-3 bg-white/20 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-white rounded-full transition-all duration-500"
+                    style={{ width: `${earningsData.totalTrips > 0 ? (earningsData.confirmedTrips / earningsData.totalTrips) * 100 : 0}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Ожидает проверки */}
+              {earningsData.totalTrips - earningsData.confirmedTrips > 0 && (
+                <div className="mt-3 bg-white/10 rounded-xl p-3 flex justify-between items-center">
+                  <span className="text-[10px]">⏳ На проверке:</span>
+                  <span className="font-black text-yellow-300">
+                    +{formatPrice(earningsData.totalPreliminary - earningsData.totalConfirmed)}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Быстрая статистика */}
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-[#12192c] p-4 rounded-2xl border border-white/5 text-center">
+                <div className="text-2xl font-black">{earningsData.totalTrips}</div>
+                <div className="text-[8px] text-slate-500 uppercase">Всего рейсов</div>
+              </div>
+              <div className="bg-[#12192c] p-4 rounded-2xl border border-green-500/20 text-center">
+                <div className="text-2xl font-black text-green-400">{earningsData.confirmedTrips}</div>
+                <div className="text-[8px] text-slate-500 uppercase">Подтверждено</div>
+              </div>
+              <div className="bg-[#12192c] p-4 rounded-2xl border border-orange-500/20 text-center">
+                <div className="text-2xl font-black text-orange-400">{earningsData.totalTrips - earningsData.confirmedTrips}</div>
+                <div className="text-[8px] text-slate-500 uppercase">На проверке</div>
               </div>
             </div>
 

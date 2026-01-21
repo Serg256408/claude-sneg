@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Order, OrderStatus, ManagerName, Contractor, AssetRequirement, AssetType, Customer, Bid, Quote, ActionLog, formatPrice, formatDateTime, generateId, PriceUnit } from '../types';
+import { Order, OrderStatus, ManagerName, Contractor, AssetRequirement, AssetType, Customer, Bid, Quote, ActionLog, formatPrice, formatDateTime, generateId, PriceUnit } from './types';
 
 interface OrderFormProps {
   initialData?: Order;
@@ -11,6 +11,46 @@ interface OrderFormProps {
   onAddContractor: () => void;
   onAddCustomer: () => void;
   currentUser: ManagerName;
+}
+
+// Интерфейс для детализации расчётов
+interface CalculationBreakdown {
+  customerTotal: number;
+  contractorTotal: number;
+  margin: number;
+  marginPercent: number;
+  truckDetails: {
+    trips: number;
+    customerPricePerTrip: number;
+    contractorPricePerTrip: number;
+    customerSubtotal: number;
+    contractorSubtotal: number;
+  };
+  loaderDetails: {
+    units: number;
+    customerPricePerUnit: number;
+    contractorPricePerUnit: number;
+    customerSubtotal: number;
+    contractorSubtotal: number;
+  };
+  byDriver: {
+    name: string;
+    assetType: AssetType;
+    trips: number;
+    confirmedTrips: number;
+    pricePerTrip: number;
+    preliminaryEarnings: number;
+    confirmedEarnings: number;
+  }[];
+}
+
+// Интерфейс для ошибок валидации
+interface ValidationErrors {
+  customer?: string;
+  address?: string;
+  assetRequirements?: string;
+  prices?: string;
+  scheduledTime?: string;
 }
 
 const OrderForm: React.FC<OrderFormProps> = ({
@@ -44,12 +84,18 @@ const OrderForm: React.FC<OrderFormProps> = ({
   const [customerSearch, setCustomerSearch] = useState(initialData?.customer || '');
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [showQuoteModal, setShowQuoteModal] = useState(false);
+  const [quoteStep, setQuoteStep] = useState<'edit' | 'preview'>('edit');
   const [quoteForm, setQuoteForm] = useState({
     truckPricePerTrip: 0,
     loaderPricePerShift: 0,
     minimalCharge: 0,
     deliveryCharge: 0,
-    notes: ''
+    discount: 0,
+    discountType: 'percent' as 'percent' | 'fixed',
+    validDays: 7,
+    notes: '',
+    includeDelivery: true,
+    includeMinimal: false
   });
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -61,25 +107,117 @@ const OrderForm: React.FC<OrderFormProps> = ({
   const unconfirmedEvidences = useMemo(() => (formData.evidences || []).filter(e => !e.confirmed), [formData.evidences]);
   const confirmedEvidences = useMemo(() => (formData.evidences || []).filter(e => e.confirmed), [formData.evidences]);
 
-  // Расчёт итогов
-  const totals = useMemo(() => {
+  // Детальный расчёт итогов
+  const calculation: CalculationBreakdown = useMemo(() => {
     let customerTotal = 0;
     let contractorTotal = 0;
     const tripsCount = formData.actualTrips || 0;
+    const plannedTrips = formData.plannedTrips || 0;
 
-    (formData.assetRequirements || []).forEach(req => {
-      if (req.type === AssetType.TRUCK) {
-        customerTotal += tripsCount * (req.customerPrice || 0);
-        contractorTotal += tripsCount * (req.contractorPrice || 0);
-      } else {
-        const units = (formData.driverDetails || []).filter(d => d.assetType === req.type).length || req.plannedUnits;
-        customerTotal += units * (req.customerPrice || 0);
-        contractorTotal += units * (req.contractorPrice || 0);
-      }
+    // Для расчёта используем фактические рейсы если есть, иначе плановые
+    const effectiveTrips = tripsCount > 0 ? tripsCount : plannedTrips;
+
+    // Детализация по самосвалам
+    const truckReq = (formData.assetRequirements || []).find(r => r.type === AssetType.TRUCK);
+    const truckDetails = {
+      trips: effectiveTrips,
+      customerPricePerTrip: truckReq?.customerPrice || 0,
+      contractorPricePerTrip: truckReq?.contractorPrice || 0,
+      customerSubtotal: effectiveTrips * (truckReq?.customerPrice || 0),
+      contractorSubtotal: effectiveTrips * (truckReq?.contractorPrice || 0)
+    };
+
+    // Детализация по погрузчикам
+    const loaderReqs = (formData.assetRequirements || []).filter(r => r.type === AssetType.LOADER || r.type === AssetType.MINI_LOADER);
+    const loaderUnits = loaderReqs.reduce((sum, req) => {
+      const assignedUnits = (formData.driverDetails || []).filter(d => d.assetType === req.type).length;
+      return sum + (assignedUnits || req.plannedUnits);
+    }, 0);
+    const loaderCustomerPrice = loaderReqs[0]?.customerPrice || 0;
+    const loaderContractorPrice = loaderReqs[0]?.contractorPrice || 0;
+
+    const loaderDetails = {
+      units: loaderUnits,
+      customerPricePerUnit: loaderCustomerPrice,
+      contractorPricePerUnit: loaderContractorPrice,
+      customerSubtotal: loaderUnits * loaderCustomerPrice,
+      contractorSubtotal: loaderUnits * loaderContractorPrice
+    };
+
+    customerTotal = truckDetails.customerSubtotal + loaderDetails.customerSubtotal;
+    contractorTotal = truckDetails.contractorSubtotal + loaderDetails.contractorSubtotal;
+
+    // Расчёт по каждому водителю
+    const byDriver: CalculationBreakdown['byDriver'] = [];
+    const driverNames = new Set((formData.driverDetails || []).map(d => d.driverName));
+
+    driverNames.forEach(name => {
+      const driverAssignment = (formData.driverDetails || []).find(d => d.driverName === name);
+      if (!driverAssignment) return;
+
+      const driverEvidences = (formData.evidences || []).filter(e => e.driverName === name);
+      const confirmedEvidences = driverEvidences.filter(e => e.confirmed);
+
+      const pricePerTrip = driverAssignment.assignedPrice ||
+        (formData.assetRequirements || []).find(r => r.type === driverAssignment.assetType)?.contractorPrice || 0;
+
+      byDriver.push({
+        name,
+        assetType: driverAssignment.assetType,
+        trips: driverEvidences.length,
+        confirmedTrips: confirmedEvidences.length,
+        pricePerTrip,
+        preliminaryEarnings: driverEvidences.length * pricePerTrip,
+        confirmedEarnings: confirmedEvidences.length * pricePerTrip
+      });
     });
 
-    return { customerTotal, contractorTotal, margin: customerTotal - contractorTotal };
-  }, [formData.assetRequirements, formData.actualTrips, formData.driverDetails]);
+    const margin = customerTotal - contractorTotal;
+    const marginPercent = customerTotal > 0 ? Math.round((margin / customerTotal) * 100) : 0;
+
+    return {
+      customerTotal,
+      contractorTotal,
+      margin,
+      marginPercent,
+      truckDetails,
+      loaderDetails,
+      byDriver
+    };
+  }, [formData.assetRequirements, formData.actualTrips, formData.plannedTrips, formData.driverDetails, formData.evidences]);
+
+  // Для обратной совместимости
+  const totals = calculation;
+
+  // Валидация данных перед отправкой КП
+  const validateForQuote = useCallback((): ValidationErrors => {
+    const errors: ValidationErrors = {};
+
+    if (!formData.customer?.trim()) {
+      errors.customer = 'Выберите заказчика';
+    }
+
+    if (!formData.address?.trim()) {
+      errors.address = 'Укажите адрес объекта';
+    }
+
+    if (!formData.assetRequirements || formData.assetRequirements.length === 0) {
+      errors.assetRequirements = 'Добавьте хотя бы один вид техники';
+    }
+
+    const hasZeroPrices = (formData.assetRequirements || []).some(r => !r.customerPrice || r.customerPrice <= 0);
+    if (hasZeroPrices) {
+      errors.prices = 'Укажите цены для клиента по всем видам техники';
+    }
+
+    if (!formData.scheduledTime) {
+      errors.scheduledTime = 'Укажите дату и время';
+    }
+
+    return errors;
+  }, [formData]);
+
+  const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
 
   // Логирование действий
   const logAction = useCallback((action: string, actionType: ActionLog['actionType'], prevValue?: string, newValue?: string) => {
@@ -243,6 +381,15 @@ const OrderForm: React.FC<OrderFormProps> = ({
 
   // Открытие модалки КП с заполнением цен из assetRequirements
   const openQuoteModal = () => {
+    // Валидация перед открытием
+    const errors = validateForQuote();
+    setValidationErrors(errors);
+
+    if (Object.keys(errors).length > 0) {
+      // Показываем ошибки, но всё равно открываем модалку
+      alert('Внимание: заполните обязательные поля для создания КП');
+    }
+
     // Находим цены из assetRequirements
     let truckPrice = 0;
     let loaderPrice = 0;
@@ -265,38 +412,109 @@ const OrderForm: React.FC<OrderFormProps> = ({
       loaderPricePerShift: loaderPrice,
       minimalCharge: minimalCharge,
       deliveryCharge: deliveryCharge,
-      notes: ''
+      discount: 0,
+      discountType: 'percent',
+      validDays: 7,
+      notes: '',
+      includeDelivery: deliveryCharge > 0,
+      includeMinimal: minimalCharge > 0
     });
+    setQuoteStep('edit');
     setShowQuoteModal(true);
   };
 
+  // Расчёт итоговой суммы КП
+  const calculateQuoteTotal = useCallback(() => {
+    const plannedTrips = formData.plannedTrips || 0;
+    const loaderUnits = (formData.assetRequirements || [])
+      .filter(r => r.type === AssetType.LOADER || r.type === AssetType.MINI_LOADER)
+      .reduce((sum, r) => sum + r.plannedUnits, 0);
+
+    let subtotal = 0;
+    subtotal += quoteForm.truckPricePerTrip * plannedTrips;
+    subtotal += quoteForm.loaderPricePerShift * loaderUnits;
+
+    if (quoteForm.includeMinimal) {
+      subtotal += quoteForm.minimalCharge;
+    }
+    if (quoteForm.includeDelivery) {
+      subtotal += quoteForm.deliveryCharge;
+    }
+
+    let discount = 0;
+    if (quoteForm.discount > 0) {
+      if (quoteForm.discountType === 'percent') {
+        discount = subtotal * (quoteForm.discount / 100);
+      } else {
+        discount = quoteForm.discount;
+      }
+    }
+
+    return {
+      subtotal,
+      discount,
+      total: subtotal - discount,
+      breakdown: {
+        truck: quoteForm.truckPricePerTrip * plannedTrips,
+        loader: quoteForm.loaderPricePerShift * loaderUnits,
+        minimal: quoteForm.includeMinimal ? quoteForm.minimalCharge : 0,
+        delivery: quoteForm.includeDelivery ? quoteForm.deliveryCharge : 0
+      }
+    };
+  }, [formData.plannedTrips, formData.assetRequirements, quoteForm]);
+
   // Создание КП
   const createQuote = () => {
+    // Финальная валидация
+    const errors = validateForQuote();
+    if (Object.keys(errors).length > 0) {
+      setValidationErrors(errors);
+      alert('Пожалуйста, заполните все обязательные поля перед отправкой КП');
+      setQuoteStep('edit');
+      return;
+    }
+
+    const quoteCalc = calculateQuoteTotal();
+
     const quote: Quote = {
       id: generateId(),
       orderId: formData.id || '',
       createdBy: currentUser,
       createdAt: new Date().toISOString(),
-      validUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      validUntil: new Date(Date.now() + quoteForm.validDays * 24 * 60 * 60 * 1000).toISOString(),
       truckPricePerTrip: quoteForm.truckPricePerTrip,
       loaderPricePerShift: quoteForm.loaderPricePerShift,
-      minimalCharge: quoteForm.minimalCharge,
-      deliveryCharge: quoteForm.deliveryCharge,
-      estimatedTotal: (quoteForm.truckPricePerTrip * (formData.plannedTrips || 0)) + quoteForm.loaderPricePerShift + quoteForm.minimalCharge + quoteForm.deliveryCharge,
+      minimalCharge: quoteForm.includeMinimal ? quoteForm.minimalCharge : 0,
+      deliveryCharge: quoteForm.includeDelivery ? quoteForm.deliveryCharge : 0,
+      estimatedTotal: quoteCalc.total,
       notes: quoteForm.notes,
       status: 'sent'
     };
 
-    setFormData(prev => ({
-      ...prev,
-      quotes: [...(prev.quotes || []), quote],
-      currentQuote: quote,
-      status: OrderStatus.AWAITING_CUSTOMER
-    }));
+    // Обновляем цены в assetRequirements
+    const updatedRequirements = (formData.assetRequirements || []).map(req => {
+      if (req.type === AssetType.TRUCK) {
+        return { ...req, customerPrice: quoteForm.truckPricePerTrip };
+      } else if (req.type === AssetType.LOADER || req.type === AssetType.MINI_LOADER) {
+        return { ...req, customerPrice: quoteForm.loaderPricePerShift };
+      }
+      return req;
+    });
 
-    logAction('Создано и отправлено КП', 'price_update');
+    const updatedData = {
+      ...formData,
+      assetRequirements: updatedRequirements,
+      quotes: [...(formData.quotes || []), quote],
+      currentQuote: quote,
+      status: OrderStatus.AWAITING_CUSTOMER,
+      totalCustomerPrice: quoteCalc.total
+    };
+
+    setFormData(updatedData);
+    logAction(`Создано и отправлено КП на сумму ${formatPrice(quoteCalc.total)}`, 'price_update');
     setShowQuoteModal(false);
-    onSubmit({ ...formData, quotes: [...(formData.quotes || []), quote], currentQuote: quote, status: OrderStatus.AWAITING_CUSTOMER });
+    setQuoteStep('edit');
+    onSubmit(updatedData);
   };
 
   // Статусы для степпера
@@ -613,20 +831,101 @@ const OrderForm: React.FC<OrderFormProps> = ({
                 </div>
               </div>
 
+              {/* Детальный расчёт */}
+              <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5">
+                <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">
+                  Детализация расчёта
+                </h4>
+
+                {/* Строка самосвалов */}
+                {calculation.truckDetails.trips > 0 && (
+                  <div className="flex justify-between items-center py-3 border-b border-white/5">
+                    <div className="flex items-center gap-3">
+                      <span className="text-xl">🚛</span>
+                      <div>
+                        <div className="text-sm font-bold">Самосвал</div>
+                        <div className="text-[9px] text-slate-500">
+                          {formatPrice(calculation.truckDetails.customerPricePerTrip)}/рейс × {calculation.truckDetails.trips} рейсов
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-black">{formatPrice(calculation.truckDetails.customerSubtotal)}</div>
+                      <div className="text-[9px] text-green-400">Водителю: {formatPrice(calculation.truckDetails.contractorSubtotal)}</div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Строка погрузчиков */}
+                {calculation.loaderDetails.units > 0 && (
+                  <div className="flex justify-between items-center py-3 border-b border-white/5">
+                    <div className="flex items-center gap-3">
+                      <span className="text-xl">🚜</span>
+                      <div>
+                        <div className="text-sm font-bold">Погрузчик</div>
+                        <div className="text-[9px] text-slate-500">
+                          {formatPrice(calculation.loaderDetails.customerPricePerUnit)}/смена × {calculation.loaderDetails.units} ед.
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-black">{formatPrice(calculation.loaderDetails.customerSubtotal)}</div>
+                      <div className="text-[9px] text-green-400">Водителю: {formatPrice(calculation.loaderDetails.contractorSubtotal)}</div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Итоги по водителям */}
+                {calculation.byDriver.length > 0 && (
+                  <div className="mt-4 pt-4 border-t border-white/10">
+                    <div className="text-[9px] font-black text-slate-500 uppercase mb-3">По водителям</div>
+                    <div className="space-y-2">
+                      {calculation.byDriver.map((driver, i) => (
+                        <div key={i} className="flex justify-between items-center bg-white/5 p-3 rounded-xl">
+                          <div className="flex items-center gap-2">
+                            <span>{driver.assetType === AssetType.LOADER ? '🚜' : '🚛'}</span>
+                            <div>
+                              <div className="text-[10px] font-bold">{driver.name}</div>
+                              <div className="text-[8px] text-slate-500">
+                                {driver.confirmedTrips}/{driver.trips} рейсов подтв.
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-[10px] text-green-400 font-black">
+                              {formatPrice(driver.confirmedEarnings)}
+                            </div>
+                            <div className="text-[8px] text-slate-500">
+                              из {formatPrice(driver.preliminaryEarnings)}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Итоги */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5">
-                  <div className="text-[10px] font-black text-slate-500 uppercase mb-2">Итого клиенту</div>
-                  <div className="text-3xl font-black">{formatPrice(totals.customerTotal)}</div>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="bg-[#12192c] p-5 rounded-2xl border border-white/5">
+                  <div className="text-[9px] font-black text-slate-500 uppercase mb-1">Клиенту</div>
+                  <div className="text-2xl font-black">{formatPrice(calculation.customerTotal)}</div>
                 </div>
-                <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5">
-                  <div className="text-[10px] font-black text-slate-500 uppercase mb-2">Итого подрядчикам</div>
-                  <div className="text-3xl font-black text-green-400">{formatPrice(totals.contractorTotal)}</div>
+                <div className="bg-[#12192c] p-5 rounded-2xl border border-white/5">
+                  <div className="text-[9px] font-black text-slate-500 uppercase mb-1">Подрядчикам</div>
+                  <div className="text-2xl font-black text-green-400">{formatPrice(calculation.contractorTotal)}</div>
                 </div>
-                <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5">
-                  <div className="text-[10px] font-black text-slate-500 uppercase mb-2">Маржа</div>
-                  <div className={`text-3xl font-black ${totals.margin >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {formatPrice(totals.margin)}
+                <div className="bg-[#12192c] p-5 rounded-2xl border border-white/5">
+                  <div className="text-[9px] font-black text-slate-500 uppercase mb-1">Маржа</div>
+                  <div className={`text-2xl font-black ${calculation.margin >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
+                    {formatPrice(calculation.margin)}
+                  </div>
+                </div>
+                <div className="bg-[#12192c] p-5 rounded-2xl border border-white/5">
+                  <div className="text-[9px] font-black text-slate-500 uppercase mb-1">Маржа %</div>
+                  <div className={`text-2xl font-black ${calculation.marginPercent >= 15 ? 'text-green-400' : calculation.marginPercent >= 0 ? 'text-yellow-400' : 'text-red-400'}`}>
+                    {calculation.marginPercent}%
                   </div>
                 </div>
               </div>
@@ -822,58 +1121,308 @@ const OrderForm: React.FC<OrderFormProps> = ({
         </button>
       </div>
 
-      {/* Модалка КП */}
+      {/* Модалка КП - улучшенная версия */}
       {showQuoteModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-50 p-4">
-          <div className="bg-[#12192c] rounded-3xl p-6 max-w-md w-full shadow-2xl border border-white/10">
-            <h3 className="text-lg font-black uppercase tracking-tight mb-6">📋 Создать КП</h3>
-            
-            <div className="space-y-4">
-              <div>
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Самосвал (за рейс)</label>
-                <input
-                  type="number"
-                  className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-3 text-lg font-black outline-none"
-                  value={quoteForm.truckPricePerTrip}
-                  onChange={e => setQuoteForm({ ...quoteForm, truckPricePerTrip: parseInt(e.target.value) || 0 })}
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Погрузчик (за смену)</label>
-                <input
-                  type="number"
-                  className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-3 text-lg font-black outline-none"
-                  value={quoteForm.loaderPricePerShift}
-                  onChange={e => setQuoteForm({ ...quoteForm, loaderPricePerShift: parseInt(e.target.value) || 0 })}
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Примечания</label>
-                <textarea
-                  className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-3 text-sm outline-none min-h-[80px]"
-                  value={quoteForm.notes}
-                  onChange={e => setQuoteForm({ ...quoteForm, notes: e.target.value })}
-                  placeholder="Что включено, условия..."
-                />
-              </div>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-[#12192c] rounded-3xl p-6 max-w-2xl w-full shadow-2xl border border-white/10 my-4">
+            {/* Заголовок */}
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-black uppercase tracking-tight">
+                {quoteStep === 'edit' ? '📋 Создать КП' : '👁 Предпросмотр КП'}
+              </h3>
+              <button onClick={() => { setShowQuoteModal(false); setQuoteStep('edit'); }} className="text-slate-500 hover:text-white text-2xl">×</button>
             </div>
 
-            <div className="flex gap-3 mt-6">
-              <button
-                type="button"
-                onClick={() => setShowQuoteModal(false)}
-                className="flex-1 bg-white/10 text-white py-4 rounded-xl text-[11px] font-black uppercase"
-              >
-                Отмена
-              </button>
-              <button
-                type="button"
-                onClick={createQuote}
-                className="flex-1 bg-blue-600 text-white py-4 rounded-xl text-[11px] font-black uppercase"
-              >
-                Отправить КП
-              </button>
-            </div>
+            {/* Ошибки валидации */}
+            {Object.keys(validationErrors).length > 0 && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 mb-6">
+                <div className="text-[10px] font-black text-red-400 uppercase mb-2">Заполните обязательные поля:</div>
+                <ul className="text-[10px] text-red-300 space-y-1">
+                  {validationErrors.customer && <li>• {validationErrors.customer}</li>}
+                  {validationErrors.address && <li>• {validationErrors.address}</li>}
+                  {validationErrors.assetRequirements && <li>• {validationErrors.assetRequirements}</li>}
+                  {validationErrors.prices && <li>• {validationErrors.prices}</li>}
+                </ul>
+              </div>
+            )}
+
+            {quoteStep === 'edit' ? (
+              <>
+                {/* Форма редактирования */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                  <div>
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">
+                      🚛 Самосвал (за рейс)
+                    </label>
+                    <input
+                      type="number"
+                      className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-3 text-lg font-black outline-none focus:border-blue-500"
+                      value={quoteForm.truckPricePerTrip || ''}
+                      onChange={e => setQuoteForm({ ...quoteForm, truckPricePerTrip: parseInt(e.target.value) || 0 })}
+                      placeholder="0"
+                    />
+                    <div className="text-[8px] text-slate-600 mt-1">
+                      План: {formData.plannedTrips || 0} рейсов
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">
+                      🚜 Погрузчик (за смену)
+                    </label>
+                    <input
+                      type="number"
+                      className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-3 text-lg font-black outline-none focus:border-blue-500"
+                      value={quoteForm.loaderPricePerShift || ''}
+                      onChange={e => setQuoteForm({ ...quoteForm, loaderPricePerShift: parseInt(e.target.value) || 0 })}
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
+
+                {/* Дополнительные опции */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                  <label className="flex items-center gap-3 bg-white/5 p-3 rounded-xl cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={quoteForm.includeDelivery}
+                      onChange={e => setQuoteForm({ ...quoteForm, includeDelivery: e.target.checked })}
+                      className="w-5 h-5 rounded bg-white/10"
+                    />
+                    <div className="flex-1">
+                      <div className="text-[10px] font-bold">Подача техники</div>
+                      <input
+                        type="number"
+                        disabled={!quoteForm.includeDelivery}
+                        className="w-full bg-transparent text-lg font-black outline-none disabled:opacity-30"
+                        value={quoteForm.deliveryCharge || ''}
+                        onChange={e => setQuoteForm({ ...quoteForm, deliveryCharge: parseInt(e.target.value) || 0 })}
+                        placeholder="0 ₽"
+                      />
+                    </div>
+                  </label>
+                  <label className="flex items-center gap-3 bg-white/5 p-3 rounded-xl cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={quoteForm.includeMinimal}
+                      onChange={e => setQuoteForm({ ...quoteForm, includeMinimal: e.target.checked })}
+                      className="w-5 h-5 rounded bg-white/10"
+                    />
+                    <div className="flex-1">
+                      <div className="text-[10px] font-bold">Минималка</div>
+                      <input
+                        type="number"
+                        disabled={!quoteForm.includeMinimal}
+                        className="w-full bg-transparent text-lg font-black outline-none disabled:opacity-30"
+                        value={quoteForm.minimalCharge || ''}
+                        onChange={e => setQuoteForm({ ...quoteForm, minimalCharge: parseInt(e.target.value) || 0 })}
+                        placeholder="0 ₽"
+                      />
+                    </div>
+                  </label>
+                </div>
+
+                {/* Скидка */}
+                <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-4 mb-6">
+                  <div className="text-[10px] font-black text-green-400 uppercase mb-3">Скидка (необязательно)</div>
+                  <div className="flex gap-3">
+                    <input
+                      type="number"
+                      className="flex-1 bg-[#0a0f1d] border border-white/10 rounded-xl p-3 text-lg font-black outline-none"
+                      value={quoteForm.discount || ''}
+                      onChange={e => setQuoteForm({ ...quoteForm, discount: parseInt(e.target.value) || 0 })}
+                      placeholder="0"
+                    />
+                    <select
+                      className="bg-[#0a0f1d] border border-white/10 rounded-xl px-4 text-sm font-bold"
+                      value={quoteForm.discountType}
+                      onChange={e => setQuoteForm({ ...quoteForm, discountType: e.target.value as 'percent' | 'fixed' })}
+                    >
+                      <option value="percent">%</option>
+                      <option value="fixed">₽</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Срок действия и примечания */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                  <div>
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">
+                      Срок действия КП
+                    </label>
+                    <select
+                      className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-3 text-sm font-bold"
+                      value={quoteForm.validDays}
+                      onChange={e => setQuoteForm({ ...quoteForm, validDays: parseInt(e.target.value) })}
+                    >
+                      <option value={3}>3 дня</option>
+                      <option value={7}>7 дней</option>
+                      <option value={14}>14 дней</option>
+                      <option value={30}>30 дней</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">
+                      Примечания
+                    </label>
+                    <input
+                      type="text"
+                      className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-3 text-sm outline-none"
+                      value={quoteForm.notes}
+                      onChange={e => setQuoteForm({ ...quoteForm, notes: e.target.value })}
+                      placeholder="Что включено, условия..."
+                    />
+                  </div>
+                </div>
+
+                {/* Превью суммы */}
+                <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-4 mb-6">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] font-black text-blue-400 uppercase">Итого по КП:</span>
+                    <span className="text-2xl font-black">{formatPrice(calculateQuoteTotal().total)}</span>
+                  </div>
+                  {quoteForm.discount > 0 && (
+                    <div className="text-[9px] text-green-400 text-right mt-1">
+                      Скидка: -{formatPrice(calculateQuoteTotal().discount)}
+                    </div>
+                  )}
+                </div>
+
+                {/* Кнопки */}
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => { setShowQuoteModal(false); setQuoteStep('edit'); }}
+                    className="flex-1 bg-white/10 text-white py-4 rounded-xl text-[11px] font-black uppercase"
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQuoteStep('preview')}
+                    className="flex-1 bg-blue-600 text-white py-4 rounded-xl text-[11px] font-black uppercase"
+                  >
+                    Предпросмотр →
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Предпросмотр КП */}
+                <div className="bg-white text-slate-900 rounded-2xl p-6 mb-6">
+                  <div className="text-center mb-6">
+                    <div className="text-2xl font-black mb-1">КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ</div>
+                    <div className="text-[10px] text-slate-500 uppercase tracking-widest">SnowForce Moscow Dispatch</div>
+                  </div>
+
+                  <div className="border-t border-b border-slate-200 py-4 mb-4">
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <div className="text-[9px] text-slate-500 uppercase">Заказчик</div>
+                        <div className="font-bold">{formData.customer || '—'}</div>
+                      </div>
+                      <div>
+                        <div className="text-[9px] text-slate-500 uppercase">Объект</div>
+                        <div className="font-bold">{formData.address || '—'}</div>
+                      </div>
+                      <div>
+                        <div className="text-[9px] text-slate-500 uppercase">Дата работ</div>
+                        <div className="font-bold">{formData.scheduledTime ? formatDateTime(formData.scheduledTime) : '—'}</div>
+                      </div>
+                      <div>
+                        <div className="text-[9px] text-slate-500 uppercase">Действует до</div>
+                        <div className="font-bold">{new Date(Date.now() + quoteForm.validDays * 24 * 60 * 60 * 1000).toLocaleDateString('ru')}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <table className="w-full text-sm mb-4">
+                    <thead>
+                      <tr className="text-left text-[9px] text-slate-500 uppercase">
+                        <th className="py-2">Услуга</th>
+                        <th className="py-2 text-right">Цена</th>
+                        <th className="py-2 text-right">Кол-во</th>
+                        <th className="py-2 text-right">Сумма</th>
+                      </tr>
+                    </thead>
+                    <tbody className="font-bold">
+                      {quoteForm.truckPricePerTrip > 0 && (
+                        <tr className="border-t border-slate-100">
+                          <td className="py-2">🚛 Самосвал</td>
+                          <td className="py-2 text-right">{formatPrice(quoteForm.truckPricePerTrip)}/рейс</td>
+                          <td className="py-2 text-right">{formData.plannedTrips || 0}</td>
+                          <td className="py-2 text-right">{formatPrice(calculateQuoteTotal().breakdown.truck)}</td>
+                        </tr>
+                      )}
+                      {quoteForm.loaderPricePerShift > 0 && (
+                        <tr className="border-t border-slate-100">
+                          <td className="py-2">🚜 Погрузчик</td>
+                          <td className="py-2 text-right">{formatPrice(quoteForm.loaderPricePerShift)}/смена</td>
+                          <td className="py-2 text-right">1</td>
+                          <td className="py-2 text-right">{formatPrice(calculateQuoteTotal().breakdown.loader)}</td>
+                        </tr>
+                      )}
+                      {quoteForm.includeDelivery && quoteForm.deliveryCharge > 0 && (
+                        <tr className="border-t border-slate-100">
+                          <td className="py-2">🚚 Подача техники</td>
+                          <td className="py-2 text-right">—</td>
+                          <td className="py-2 text-right">1</td>
+                          <td className="py-2 text-right">{formatPrice(quoteForm.deliveryCharge)}</td>
+                        </tr>
+                      )}
+                      {quoteForm.includeMinimal && quoteForm.minimalCharge > 0 && (
+                        <tr className="border-t border-slate-100">
+                          <td className="py-2">📋 Минимальный заказ</td>
+                          <td className="py-2 text-right">—</td>
+                          <td className="py-2 text-right">1</td>
+                          <td className="py-2 text-right">{formatPrice(quoteForm.minimalCharge)}</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+
+                  {quoteForm.discount > 0 && (
+                    <div className="flex justify-between text-sm py-2 text-green-600 border-t border-slate-100">
+                      <span>Скидка ({quoteForm.discountType === 'percent' ? `${quoteForm.discount}%` : formatPrice(quoteForm.discount)})</span>
+                      <span className="font-bold">-{formatPrice(calculateQuoteTotal().discount)}</span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-between text-xl font-black py-4 border-t-2 border-slate-900">
+                    <span>ИТОГО:</span>
+                    <span>{formatPrice(calculateQuoteTotal().total)}</span>
+                  </div>
+
+                  {quoteForm.notes && (
+                    <div className="text-[10px] text-slate-500 mt-4 p-3 bg-slate-50 rounded-lg">
+                      <div className="font-bold mb-1">Примечания:</div>
+                      {quoteForm.notes}
+                    </div>
+                  )}
+
+                  <div className="text-[9px] text-slate-400 text-center mt-4">
+                    Менеджер: {currentUser} • Дата: {new Date().toLocaleDateString('ru')}
+                  </div>
+                </div>
+
+                {/* Кнопки */}
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setQuoteStep('edit')}
+                    className="flex-1 bg-white/10 text-white py-4 rounded-xl text-[11px] font-black uppercase"
+                  >
+                    ← Редактировать
+                  </button>
+                  <button
+                    type="button"
+                    onClick={createQuote}
+                    className="flex-1 bg-green-600 text-white py-4 rounded-xl text-[11px] font-black uppercase"
+                  >
+                    ✅ Отправить заказчику
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
