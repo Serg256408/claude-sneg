@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo } from 'react';
-import { Order, OrderStatus, AssetType } from '../types';
+import { Order, OrderStatus, AssetType } from './types';
 
 interface MapDashboardProps {
   orders: Order[];

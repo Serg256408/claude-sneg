@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Customer, PaymentType } from '../types';
+import { Customer, PaymentType } from './types';
 
 interface CustomerFormProps {
   initialData?: Customer;

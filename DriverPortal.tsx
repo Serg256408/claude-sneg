@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Order, OrderStatus, TripEvidence, Contractor, AssetType, DriverAssignment, formatPrice, formatDateTime, generateId } from '../types';
+import { Order, OrderStatus, TripEvidence, Contractor, AssetType, DriverAssignment, formatPrice, formatDateTime, generateId } from './types';
 
 interface DriverPortalProps {
   orders: Order[];

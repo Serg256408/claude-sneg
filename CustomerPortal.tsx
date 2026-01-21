@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { Order, OrderStatus, AssetType, AssetRequirement, OrderRestrictions, CustomerContact, formatPrice, formatDateTime, generateId, generateOrderNumber, PriceUnit } from '../types';
+import { Order, OrderStatus, AssetType, AssetRequirement, OrderRestrictions, CustomerContact, formatPrice, formatDateTime, generateId, generateOrderNumber, PriceUnit } from './types';
 
 interface CustomerPortalProps {
   orders: Order[];

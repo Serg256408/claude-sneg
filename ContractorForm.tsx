@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Contractor } from '../types';
+import { Contractor } from './types';
 
 interface ContractorFormProps {
   initialData?: Contractor;

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Order, OrderStatus, ManagerName, Contractor, AssetRequirement, AssetType, Customer, Bid, Quote, ActionLog, formatPrice, formatDateTime, generateId, PriceUnit } from '../types';
+import { Order, OrderStatus, ManagerName, Contractor, AssetRequirement, AssetType, Customer, Bid, Quote, ActionLog, formatPrice, formatDateTime, generateId, PriceUnit } from './types';
 
 interface OrderFormProps {
   initialData?: Order;
