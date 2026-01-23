@@ -5,6 +5,10 @@ import CustomerFormDispatcher from './CustomerForm_Dispatcher';
 import ContractorForm from './ContractorForm';
 import MapDashboard from './MapDashboard';
 import OrderForm from './OrderForm';
+import SalesManagerPortal from './SalesManagerPortal';
+import EstimatorPortal from './EstimatorPortal';
+import AccountantPortal from './AccountantPortal';
+import AdminPanel from './AdminPanel';
 import {
   AssetType,
   Bid,
@@ -24,9 +28,38 @@ import {
   isOrderInDateRange,
   normalizeOrderStatus,
   PaymentType,
+  // Новые типы
+  UserRole,
+  Lead,
+  LeadStatus,
+  ServiceType,
+  ExecutionMode,
+  Estimate,
+  Invoice,
+  Payment,
+  Contract,
+  ClosingDocs,
+  User,
+  Company,
+  CompanyType,
+  PriceBookItem,
+  CommissionSettings,
+  Vehicle,
+  USER_ROLE_LABELS,
 } from './types';
 
-type Role = 'dispatcher' | 'customer' | 'contractor';
+// Расширенные роли
+type Role = 'dispatcher' | 'customer' | 'contractor' | 'sales_manager' | 'estimator' | 'accountant' | 'admin';
+
+const ROLE_LABELS: Record<Role, string> = {
+  dispatcher: 'Диспетчер',
+  customer: 'Клиент',
+  contractor: 'Подрядчики',
+  sales_manager: 'Менеджер',
+  estimator: 'Сметчик',
+  accountant: 'Бухгалтер',
+  admin: 'Админ',
+};
 
 const LS_KEYS = {
   orders: 'snowforce_orders_v1',
@@ -35,6 +68,13 @@ const LS_KEYS = {
   role: 'snowforce_role_v1',
   manager: 'snowforce_manager_v1',
   contractorId: 'snowforce_contractor_id_v1',
+  // Новые ключи
+  leads: 'snowforce_leads_v1',
+  users: 'snowforce_users_v1',
+  companies: 'snowforce_companies_v1',
+  priceBook: 'snowforce_pricebook_v1',
+  commissionSettings: 'snowforce_commission_v1',
+  vehicles: 'snowforce_vehicles_v1',
 } as const;
 
 function safeJsonParse<T>(raw: string | null, fallback: T): T {
@@ -200,6 +240,99 @@ function normalizeContractor(raw: Partial<Contractor>): Contractor {
   };
 }
 
+// Seed данные для лидов
+function seedLeads(): Lead[] {
+  const now = new Date().toISOString();
+  return [
+    {
+      id: 'lead-1',
+      source: 'phone',
+      customerName: 'ООО "НовыйКлиент"',
+      customerPhone: '+7 (999) 000-11-22',
+      customerEmail: 'new@client.ru',
+      address: 'Москва, ул. Новая, 10',
+      serviceType: ServiceType.SNOW,
+      description: 'Нужен вывоз снега со двора, примерно 100м³',
+      snowVolumeM3: 100,
+      urgency: 'normal',
+      assignedManagerId: 'manager-1',
+      assignedManagerName: 'АЛЕКСАНДР',
+      status: LeadStatus.NEW,
+      createdAt: now,
+    },
+    {
+      id: 'lead-2',
+      source: 'website',
+      customerName: 'ИП Сергеев',
+      customerPhone: '+7 (999) 111-22-33',
+      address: 'Москва, пр-т Вернадского, 50',
+      serviceType: ServiceType.ASPHALT,
+      description: 'Асфальтирование парковки 500м²',
+      asphaltAreaM2: 500,
+      asphaltType: 'parking',
+      urgency: 'urgent',
+      status: LeadStatus.CONTACTED,
+      createdAt: now,
+    },
+  ];
+}
+
+// Seed данные для пользователей
+function seedUsers(): User[] {
+  const now = new Date().toISOString();
+  return [
+    { id: 'manager-1', role: UserRole.SALES_MANAGER, phone: '+7 (999) 100-00-01', name: 'АЛЕКСАНДР', status: 'active', createdAt: now },
+    { id: 'manager-2', role: UserRole.SALES_MANAGER, phone: '+7 (999) 100-00-02', name: 'ДМИТРИЙ', status: 'active', createdAt: now },
+    { id: 'manager-3', role: UserRole.SALES_MANAGER, phone: '+7 (999) 100-00-03', name: 'ЕКАТЕРИНА', status: 'active', createdAt: now },
+    { id: 'estimator-1', role: UserRole.ESTIMATOR, phone: '+7 (999) 200-00-01', name: 'Иван Сметчиков', status: 'active', createdAt: now },
+    { id: 'dispatcher-1', role: UserRole.DISPATCHER, phone: '+7 (999) 300-00-01', name: 'Диспетчер 1', status: 'active', createdAt: now },
+    { id: 'accountant-1', role: UserRole.ACCOUNTANT, phone: '+7 (999) 400-00-01', name: 'Мария Бухгалтерова', status: 'active', createdAt: now },
+    { id: 'admin-1', role: UserRole.ADMIN, phone: '+7 (999) 500-00-01', name: 'Администратор', status: 'active', createdAt: now },
+  ];
+}
+
+// Seed данные для компаний
+function seedCompanies(): Company[] {
+  const now = new Date().toISOString();
+  return [
+    {
+      id: 'company-transkom',
+      type: CompanyType.TRANSKOM,
+      name: 'ООО "Транском"',
+      inn: '7700000100',
+      legalAddress: 'Москва, ул. Центральная, 1',
+      phone: '+7 (495) 123-45-67',
+      defaultPaymentType: PaymentType.VAT_20,
+      isVerified: true,
+      createdAt: now,
+    },
+  ];
+}
+
+// Seed данные для прайс-листа
+function seedPriceBook(): PriceBookItem[] {
+  const now = new Date().toISOString();
+  return [
+    { id: 'p1', workTypeId: 'snow_trip_20', workTypeName: 'Вывоз снега (самосвал 20м³)', serviceType: ServiceType.SNOW, unit: 'trip', unitLabel: 'рейс', baseCustomerPrice: 3500, baseCostPrice: 2800, isActive: true, createdAt: now },
+    { id: 'p2', workTypeId: 'snow_trip_25', workTypeName: 'Вывоз снега (самосвал 25м³)', serviceType: ServiceType.SNOW, unit: 'trip', unitLabel: 'рейс', baseCustomerPrice: 4200, baseCostPrice: 3400, isActive: true, createdAt: now },
+    { id: 'p3', workTypeId: 'loader_shift', workTypeName: 'Погрузчик JCB (смена)', serviceType: ServiceType.SNOW, unit: 'shift', unitLabel: 'смена', baseCustomerPrice: 15000, baseCostPrice: 12000, isActive: true, createdAt: now },
+    { id: 'p4', workTypeId: 'loader_hour', workTypeName: 'Погрузчик JCB (час)', serviceType: ServiceType.SNOW, unit: 'hour', unitLabel: 'час', baseCustomerPrice: 2500, baseCostPrice: 2000, isActive: true, createdAt: now },
+    { id: 'p5', workTypeId: 'asphalt_m2', workTypeName: 'Асфальтирование (1 слой)', serviceType: ServiceType.ASPHALT, unit: 'm2', unitLabel: 'м²', baseCustomerPrice: 450, baseCostPrice: 350, isActive: true, createdAt: now },
+    { id: 'p6', workTypeId: 'asphalt_m2_2', workTypeName: 'Асфальтирование (2 слоя)', serviceType: ServiceType.ASPHALT, unit: 'm2', unitLabel: 'м²', baseCustomerPrice: 850, baseCostPrice: 680, isActive: true, createdAt: now },
+    { id: 'p7', workTypeId: 'curb_m', workTypeName: 'Бордюр дорожный', serviceType: ServiceType.ASPHALT, unit: 'running_meter', unitLabel: 'п.м.', baseCustomerPrice: 1200, baseCostPrice: 900, isActive: true, createdAt: now },
+  ];
+}
+
+// Seed данные для техники
+function seedVehicles(): Vehicle[] {
+  const now = new Date().toISOString();
+  return [
+    { id: 'v1', ownerCompanyId: 'company-transkom', ownerCompanyName: 'Транском', ownerType: 'transkom', type: AssetType.TRUCK_20, plateNumber: 'А001АА77', capacityM3: 20, gpsEnabled: true, status: 'available', createdAt: now },
+    { id: 'v2', ownerCompanyId: 'company-transkom', ownerCompanyName: 'Транском', ownerType: 'transkom', type: AssetType.TRUCK_25, plateNumber: 'А002АА77', capacityM3: 25, gpsEnabled: true, status: 'available', createdAt: now },
+    { id: 'v3', ownerCompanyId: 'company-transkom', ownerCompanyName: 'Транском', ownerType: 'transkom', type: AssetType.LOADER_JCB, plateNumber: 'А003АА77', gpsEnabled: true, status: 'available', createdAt: now },
+  ];
+}
+
 function seedOrders(customers: Customer[]): Order[] {
   const now = new Date().toISOString();
   const getCustomer = (index: number) => customers[index] || customers[0];
@@ -248,6 +381,10 @@ function seedOrders(customers: Customer[]): Order[] {
       actionLog: [],
       messages: [],
       unreadMessages: 0,
+      // Новые поля
+      serviceType: ServiceType.SNOW,
+      executionMode: ExecutionMode.MARKETPLACE,
+      snowVolumeM3: 200,
     },
     {
       id: 'ord-2',
@@ -290,6 +427,10 @@ function seedOrders(customers: Customer[]): Order[] {
       actionLog: [],
       messages: [],
       unreadMessages: 0,
+      // Новые поля
+      serviceType: ServiceType.SNOW,
+      executionMode: ExecutionMode.OWN_FLEET,
+      snowVolumeM3: 120,
     },
     {
       id: 'ord-3',
@@ -344,6 +485,11 @@ function seedOrders(customers: Customer[]): Order[] {
       actionLog: [],
       messages: [],
       unreadMessages: 0,
+      // Новые поля
+      serviceType: ServiceType.SNOW,
+      executionMode: ExecutionMode.MARKETPLACE,
+      snowVolumeM3: 160,
+      needsLoader: true,
     },
   ];
 }
@@ -363,6 +509,14 @@ export default function App() {
     safeJsonParse(localStorage.getItem(LS_KEYS.contractors), seedContractors()).map(normalizeContractor)
   );
   const [orders, setOrders] = useState<Order[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.orders), seedOrders(seedCustomers())));
+
+  // Новые состояния
+  const [leads, setLeads] = useState<Lead[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.leads), seedLeads()));
+  const [users, setUsers] = useState<User[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.users), seedUsers()));
+  const [companies, setCompanies] = useState<Company[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.companies), seedCompanies()));
+  const [priceBook, setPriceBook] = useState<PriceBookItem[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.priceBook), seedPriceBook()));
+  const [commissionSettings, setCommissionSettings] = useState<CommissionSettings | null>(() => safeJsonParse(localStorage.getItem(LS_KEYS.commissionSettings), null));
+  const [vehicles, setVehicles] = useState<Vehicle[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.vehicles), seedVehicles()));
 
   const [view, setView] = useState<'dashboard' | 'order-form' | 'customer-form' | 'contractor-form'>('dashboard');
   const [editingOrder, setEditingOrder] = useState<Order | undefined>(undefined);
@@ -384,6 +538,13 @@ export default function App() {
   useEffect(() => localStorage.setItem(LS_KEYS.customers, JSON.stringify(customers)), [customers]);
   useEffect(() => localStorage.setItem(LS_KEYS.contractors, JSON.stringify(contractors)), [contractors]);
   useEffect(() => localStorage.setItem(LS_KEYS.orders, JSON.stringify(orders)), [orders]);
+  // Сохранение новых состояний
+  useEffect(() => localStorage.setItem(LS_KEYS.leads, JSON.stringify(leads)), [leads]);
+  useEffect(() => localStorage.setItem(LS_KEYS.users, JSON.stringify(users)), [users]);
+  useEffect(() => localStorage.setItem(LS_KEYS.companies, JSON.stringify(companies)), [companies]);
+  useEffect(() => localStorage.setItem(LS_KEYS.priceBook, JSON.stringify(priceBook)), [priceBook]);
+  useEffect(() => { if (commissionSettings) localStorage.setItem(LS_KEYS.commissionSettings, JSON.stringify(commissionSettings)); }, [commissionSettings]);
+  useEffect(() => localStorage.setItem(LS_KEYS.vehicles, JSON.stringify(vehicles)), [vehicles]);
 
   const dateRange = useMemo<DateRange>(() => ({
     from: dateFrom || undefined,
@@ -606,6 +767,153 @@ export default function App() {
     );
   }, []);
 
+  // === Новые callbacks для расширенного функционала ===
+
+  // Лиды
+  const addLead = useCallback((lead: Lead) => {
+    setLeads(prev => [lead, ...prev]);
+  }, []);
+
+  const updateLead = useCallback((leadId: string, updates: Partial<Lead>) => {
+    setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...updates } : l));
+  }, []);
+
+  const convertLeadToOrder = useCallback((lead: Lead) => {
+    const now = new Date().toISOString();
+    const newOrder: Order = {
+      id: generateId(),
+      orderNumber: generateOrderNumber(),
+      leadId: lead.id,
+      executionMode: ExecutionMode.OWN_FLEET,
+      serviceType: lead.serviceType,
+      customer: lead.customerName,
+      customerId: lead.customerCompanyId,
+      contactInfo: { name: lead.customerName, phone: lead.customerPhone, email: lead.customerEmail },
+      address: lead.address || '',
+      coordinates: [55.7558, 37.6173],
+      assetRequirements: [],
+      isBirzhaOpen: false,
+      bids: [],
+      assignments: [],
+      assignedDrivers: [],
+      driverDetails: [],
+      applicants: [],
+      plannedTrips: 0,
+      actualTrips: 0,
+      evidences: [],
+      isPaid: false,
+      scheduledTime: now.slice(0, 16),
+      status: OrderStatus.NEW_REQUEST,
+      managerName: lead.assignedManagerName || currentManager,
+      managerId: lead.assignedManagerId,
+      createdAt: now,
+      updatedAt: now,
+      actionLog: [],
+      messages: [],
+      snowVolumeM3: lead.snowVolumeM3,
+      snowAreaM2: lead.snowAreaM2,
+      snowHeightCm: lead.snowHeightCm,
+      needsLoader: lead.needsLoader,
+      asphaltAreaM2: lead.asphaltAreaM2,
+      asphaltType: lead.asphaltType,
+      needsCurb: lead.needsCurb,
+      curbLengthM: lead.curbLengthM,
+      scopeSummary: lead.description,
+    };
+    setOrders(prev => [newOrder, ...prev]);
+  }, [currentManager]);
+
+  // Сметы
+  const saveEstimate = useCallback((orderId: string, estimate: Estimate) => {
+    setOrders(prev => prev.map(o => o.id === orderId ? {
+      ...o,
+      currentEstimate: estimate,
+      estimates: [...(o.estimates || []), estimate],
+      totalCustomerPrice: estimate.totalCustomerPrice,
+      totalContractorPrice: estimate.totalCost,
+      grossProfit: estimate.grossProfit,
+      updatedAt: new Date().toISOString(),
+    } : o));
+  }, []);
+
+  // Счета
+  const createInvoice = useCallback((orderId: string, invoice: Invoice) => {
+    setOrders(prev => prev.map(o => o.id === orderId ? {
+      ...o,
+      invoices: [...(o.invoices || []), invoice],
+      invoiceIds: [...(o.invoiceIds || []), invoice.id],
+      updatedAt: new Date().toISOString(),
+    } : o));
+  }, []);
+
+  // Платежи
+  const recordPayment = useCallback((orderId: string, payment: Payment) => {
+    setOrders(prev => prev.map(o => o.id === orderId ? {
+      ...o,
+      payments: [...(o.payments || []), payment],
+      updatedAt: new Date().toISOString(),
+    } : o));
+  }, []);
+
+  // Договоры
+  const createContract = useCallback((orderId: string, contract: Contract) => {
+    setOrders(prev => prev.map(o => o.id === orderId ? {
+      ...o,
+      contract,
+      contractId: contract.id,
+      updatedAt: new Date().toISOString(),
+    } : o));
+  }, []);
+
+  // Закрывающие документы
+  const createClosingDocs = useCallback((orderId: string, docs: ClosingDocs) => {
+    setOrders(prev => prev.map(o => o.id === orderId ? {
+      ...o,
+      closingDocs: docs,
+      updatedAt: new Date().toISOString(),
+    } : o));
+  }, []);
+
+  // Пользователи
+  const addUser = useCallback((user: User) => {
+    setUsers(prev => [user, ...prev]);
+  }, []);
+
+  const updateUser = useCallback((userId: string, updates: Partial<User>) => {
+    setUsers(prev => prev.map(u => u.id === userId ? { ...u, ...updates } : u));
+  }, []);
+
+  // Компании
+  const addCompany = useCallback((company: Company) => {
+    setCompanies(prev => [company, ...prev]);
+  }, []);
+
+  const updateCompany = useCallback((companyId: string, updates: Partial<Company>) => {
+    setCompanies(prev => prev.map(c => c.id === companyId ? { ...c, ...updates } : c));
+  }, []);
+
+  // Прайс-лист
+  const addPriceItem = useCallback((item: PriceBookItem) => {
+    setPriceBook(prev => [item, ...prev]);
+  }, []);
+
+  const updatePriceItem = useCallback((itemId: string, updates: Partial<PriceBookItem>) => {
+    setPriceBook(prev => prev.map(p => p.id === itemId ? { ...p, ...updates } : p));
+  }, []);
+
+  const deletePriceItem = useCallback((itemId: string) => {
+    setPriceBook(prev => prev.filter(p => p.id !== itemId));
+  }, []);
+
+  // Техника
+  const addVehicle = useCallback((vehicle: Vehicle) => {
+    setVehicles(prev => [vehicle, ...prev]);
+  }, []);
+
+  const updateVehicle = useCallback((vehicleId: string, updates: Partial<Vehicle>) => {
+    setVehicles(prev => prev.map(v => v.id === vehicleId ? { ...v, ...updates } : v));
+  }, []);
+
   // Обновление данных назначения водителя (например, время смены погрузчика)
   const updateDriverAssignment = useCallback((orderId: string, driverAssignmentId: string, updates: Partial<DriverAssignment>) => {
     setOrders(prev =>
@@ -691,12 +999,12 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 py-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
             <div className="font-black tracking-tight text-lg">SnowForce Dispatch</div>
-            <div className="flex items-center gap-2">
-              {(['dispatcher', 'customer', 'contractor'] as Role[]).map(r => (
+            <div className="flex items-center gap-1 flex-wrap">
+              {(['dispatcher', 'sales_manager', 'estimator', 'accountant', 'customer', 'contractor', 'admin'] as Role[]).map(r => (
                 <button
                   key={r}
-                  className={`px-3 py-2 rounded-xl text-xs font-black uppercase tracking-widest border ${
-                    role === r ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-200'
+                  className={`px-2 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border ${
+                    role === r ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                   }`}
                   onClick={() => {
                     setRole(r);
@@ -704,7 +1012,7 @@ export default function App() {
                     setSelectedMapOrder(null);
                   }}
                 >
-                  {r === 'dispatcher' ? 'Диспетчер' : r === 'customer' ? 'Клиент' : 'Подрядчики'}
+                  {ROLE_LABELS[r]}
                 </button>
               ))}
             </div>
@@ -841,6 +1149,66 @@ export default function App() {
             onAcceptJob={acceptJob}
             onFinishWork={finishWork}
             onUpdateDriverAssignment={updateDriverAssignment}
+          />
+        )}
+
+        {/* Новые порталы */}
+        {role === 'sales_manager' && (
+          <SalesManagerPortal
+            leads={leads}
+            orders={orders}
+            customers={customers}
+            contractors={contractors}
+            currentManagerId="manager-1"
+            currentManagerName={currentManager}
+            onAddLead={addLead}
+            onUpdateLead={updateLead}
+            onConvertLeadToOrder={convertLeadToOrder}
+            onUpdateOrder={updateOrder}
+          />
+        )}
+
+        {role === 'estimator' && (
+          <EstimatorPortal
+            orders={orders}
+            priceBook={priceBook}
+            currentEstimatorId="estimator-1"
+            currentEstimatorName="Сметчик"
+            onUpdateOrder={updateOrder}
+            onSaveEstimate={saveEstimate}
+          />
+        )}
+
+        {role === 'accountant' && (
+          <AccountantPortal
+            orders={orders}
+            onUpdateOrder={updateOrder}
+            onCreateInvoice={createInvoice}
+            onCreateContract={createContract}
+            onRecordPayment={recordPayment}
+            onCreateClosingDocs={createClosingDocs}
+            currentUserId="accountant-1"
+            currentUserName="Бухгалтер"
+          />
+        )}
+
+        {role === 'admin' && (
+          <AdminPanel
+            users={users}
+            companies={companies}
+            priceBook={priceBook}
+            commissionSettings={commissionSettings}
+            vehicles={vehicles}
+            onAddUser={addUser}
+            onUpdateUser={updateUser}
+            onAddCompany={addCompany}
+            onUpdateCompany={updateCompany}
+            onAddPriceItem={addPriceItem}
+            onUpdatePriceItem={updatePriceItem}
+            onDeletePriceItem={deletePriceItem}
+            onUpdateCommissionSettings={setCommissionSettings}
+            onAddVehicle={addVehicle}
+            onUpdateVehicle={updateVehicle}
           />
         )}
       </div>
