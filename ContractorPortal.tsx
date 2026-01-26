@@ -343,10 +343,10 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
             ) : (
               filteredAvailableOrders.map(order => {
                 const birzhaRequirements = order.assetRequirements.filter(r => !r.contractorId);
-                const hasAnyMyPendingBid = filteredMyBids.some(b => b.order.id === order.id && b.bid.status === 'pending');
+                const hasAnyMyBid = filteredMyBids.some(b => b.order.id === order.id);
                 
                 return (
-                  <div key={order.id} className={`bg-[#12192c] rounded-2xl border ${hasAnyMyPendingBid ? 'border-blue-500/50' : 'border-white/5'} overflow-hidden shadow-xl`}>
+                  <div key={order.id} className={`bg-[#12192c] rounded-2xl border ${hasAnyMyBid ? 'border-blue-500/50' : 'border-white/5'} overflow-hidden shadow-xl`}>
                     <div className="p-5">
                       <div className="flex justify-between items-start mb-3">
                         <div>
@@ -371,15 +371,23 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                       <div className="space-y-2">
                         {birzhaRequirements.map((req, i) => {
                           const assignedCount = (order.driverDetails || []).filter(d => d.assetType === req.type).length;
-                          const remaining = req.plannedUnits - assignedCount;
-                          const hasMyPendingBidForType = filteredMyBids.some(
-                            b => b.order.id === order.id && b.bid.status === 'pending' && b.bid.assetType === req.type
+                          const remaining = Math.max(0, req.plannedUnits - assignedCount);
+                          const myBidForType = filteredMyBids.find(
+                            b => b.order.id === order.id && b.bid.assetType === req.type
                           );
-                          
-                          if (remaining <= 0) return null;
+                          const hasMyBidForType = Boolean(myBidForType);
                           
                           const isTruck = req.type === AssetType.TRUCK;
                           const typeName = req.type === AssetType.LOADER ? 'Погрузчик' : req.type === AssetType.MINI_LOADER ? 'Мини-погрузчик' : 'Самосвал';
+                          const bidStatusLabel = myBidForType?.bid.status === 'withdrawn'
+                            ? 'Отклик отозван'
+                            : myBidForType?.bid.status === 'rejected'
+                              ? 'Отклик отклонён'
+                              : myBidForType?.bid.status === 'accepted'
+                                ? 'Отклик принят'
+                                : myBidForType?.bid.status === 'pending'
+                                  ? 'Отклик отправлен'
+                                  : 'Отклик отправлен';
                           
                           return (
                             <div key={i} className="flex items-center justify-between bg-white/5 p-3 rounded-xl">
@@ -398,7 +406,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                                   <div className="text-lg font-black text-green-400">{formatPrice(req.contractorPrice)}</div>
                                   <div className="text-[8px] text-slate-500">{isTruck ? 'за рейс' : 'за смену'}</div>
                                 </div>
-                                {!hasMyPendingBidForType ? (
+                                {!hasMyBidForType ? (
                                   <button 
                                     onClick={() => openBidModal(order, req.type)}
                                     className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase"
@@ -407,7 +415,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                                   </button>
                                 ) : (
                                   <div className="px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest bg-blue-600/20 text-blue-300 border border-blue-500/30">
-                                    ✓ Отклик отправлен
+                                    ✓ {bidStatusLabel}
                                   </div>
                                 )}
                               </div>
@@ -454,9 +462,19 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                           const assigned = (order.driverDetails || []).filter(d => d.assetType === req.type).length;
                           const remaining = (req.plannedUnits || 0) - assigned;
                           if (remaining <= 0) return null;
-                          const hasMyPendingBidForType = filteredMyBids.some(
-                            b => b.order.id === order.id && b.bid.status === 'pending' && b.bid.assetType === req.type
+                          const myBidForType = filteredMyBids.find(
+                            b => b.order.id === order.id && b.bid.assetType === req.type
                           );
+                          const hasMyBidForType = Boolean(myBidForType);
+                          const bidStatusLabel = myBidForType?.bid.status === 'withdrawn'
+                            ? 'Отклик отозван'
+                            : myBidForType?.bid.status === 'rejected'
+                              ? 'Отклик отклонён'
+                              : myBidForType?.bid.status === 'accepted'
+                                ? 'Отклик принят'
+                                : myBidForType?.bid.status === 'pending'
+                                  ? 'Отклик отправлен'
+                                  : 'Отклик отправлен';
                           return (
                             <div key={i} className="flex items-center justify-between bg-white/5 p-3 rounded-xl">
                               <div className="flex items-center gap-3">
@@ -470,7 +488,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                               </div>
                               <div className="flex items-center gap-3">
                                 <div className="text-lg font-black text-green-400">{formatPrice(req.contractorPrice)}</div>
-                                {!hasMyPendingBidForType ? (
+                                {!hasMyBidForType ? (
                                   <button
                                     onClick={() => openBidModal(order, req.type)}
                                     className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase"
@@ -479,7 +497,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                                   </button>
                                 ) : (
                                   <div className="px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest bg-blue-600/20 text-blue-300 border border-blue-500/30">
-                                    ✓ Отклик отправлен
+                                    ✓ {bidStatusLabel}
                                   </div>
                                 )}
                               </div>

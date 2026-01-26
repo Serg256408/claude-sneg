@@ -363,7 +363,7 @@ function seedOrders(customers: Customer[]): Order[] {
           deliveryCharge: 0,
         },
       ],
-      isBirzhaOpen: true,
+      isBirzhaOpen: false,
       bids: [],
       assignments: [],
       assignedDrivers: [],
@@ -467,7 +467,7 @@ function seedOrders(customers: Customer[]): Order[] {
           deliveryCharge: 0,
         },
       ],
-      isBirzhaOpen: true,
+      isBirzhaOpen: false,
       bids: [],
       assignments: [],
       assignedDrivers: [],
@@ -686,7 +686,36 @@ export default function App() {
     setOrders(prev =>
       prev.map(o =>
         o.id === orderId
-          ? ({ ...o, bids: (o.bids || []).map(b => (b.id === bidId ? { ...b, status: 'withdrawn' } : b)) } as Order)
+          ? (() => {
+              const bids = (o.bids || []).map(b => (b.id === bidId ? { ...b, status: 'withdrawn' } : b));
+              const withdrawnBid = (o.bids || []).find(b => b.id === bidId);
+              if (!withdrawnBid) {
+                return { ...o, bids, updatedAt: new Date().toISOString() } as Order;
+              }
+              const isBeforeWork = (status: DriverAssignment['status']) =>
+                ['assigned', 'confirmed'].includes(status);
+              const shouldRemove = (assignment: DriverAssignment) => {
+                if (!isBeforeWork(assignment.status)) return false;
+                if (withdrawnBid.contractorId && assignment.contractorId !== withdrawnBid.contractorId) return false;
+                if (withdrawnBid.driverId && assignment.driverId !== withdrawnBid.driverId) return false;
+                if (assignment.assetType !== withdrawnBid.assetType) return false;
+                if (withdrawnBid.driverName && assignment.driverName !== withdrawnBid.driverName) return false;
+                return true;
+              };
+              const updatedAssignments = (o.assignments || []).filter(a => !shouldRemove(a));
+              const updatedDriverDetails = (o.driverDetails || []).filter(a => !shouldRemove(a));
+              const assignedDrivers = (o.assignedDrivers || []).filter(name =>
+                updatedDriverDetails.some(d => d.driverName === name)
+              );
+              return {
+                ...o,
+                bids,
+                assignments: updatedAssignments,
+                driverDetails: updatedDriverDetails,
+                assignedDrivers,
+                updatedAt: new Date().toISOString(),
+              } as Order;
+            })()
           : o
       )
     );
@@ -993,8 +1022,13 @@ export default function App() {
     return null;
   }, [contractors, currentContractorId, currentManager, role]);
 
+  const buildTag = `BUILD: ${new Date().toLocaleString()}`;
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
+      <div className="fixed bottom-3 right-3 z-50 rounded-full bg-black/80 text-white text-[10px] font-black uppercase tracking-widest px-3 py-1 shadow-lg">
+        {buildTag}
+      </div>
       <div className="sticky top-0 z-20 bg-white/80 backdrop-blur border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 py-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">

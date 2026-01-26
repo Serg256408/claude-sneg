@@ -140,8 +140,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
     orders.forEach(o => {
       if (!o.isBirzhaOpen || [OrderStatus.COMPLETED, OrderStatus.CANCELLED].includes(normalizeOrderStatus(o.status))) return;
       o.assetRequirements.filter(req => !req.contractorId).forEach(req => {
-        const assigned = (o.driverDetails || []).filter(d => d.assetType === req.type && !d.contractorId).length;
-        if (assigned < req.plannedUnits && !(o.driverDetails || []).some(d => d.driverName === driverName && d.assetType === req.type)) {
+        if (!(o.driverDetails || []).some(d => d.driverName === driverName && d.assetType === req.type)) {
           list.push({ order: o, type: req.type });
         }
       });

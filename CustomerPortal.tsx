@@ -244,7 +244,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
       customerId: selectedCustomerId || formData.customerId,
       orderNumber: generateOrderNumber(),
       status: OrderStatus.NEW_REQUEST,
-      isBirzhaOpen: true,
+      isBirzhaOpen: false,
       bids: [],
       assignments: [],
       assignedDrivers: [],
@@ -555,8 +555,15 @@ ${confirmedEvidences.map((ev, i) =>
     });
   };
 
-  const getStatusBadge = (status: OrderStatus) => {
-    const normalized = normalizeOrderStatus(status);
+  const getStatusBadge = (order: Order) => {
+    const normalized = normalizeOrderStatus(order.status);
+    const hasAssignedTech = (order.driverDetails || []).length > 0 || (order.assignments || []).length > 0;
+    const displayStatus = normalized === OrderStatus.SEARCHING_EQUIPMENT && hasAssignedTech
+      ? OrderStatus.EQUIPMENT_APPROVED
+      : normalized;
+    const displayLabel = displayStatus === OrderStatus.SEARCHING_EQUIPMENT
+      ? 'Назначение техники'
+      : getOrderStatusLabel(displayStatus);
     const styles: Record<OrderStatus, string> = {
       [OrderStatus.NEW_REQUEST]: 'bg-slate-600/20 text-slate-400 border-slate-500/20',
       [OrderStatus.AWAITING_CUSTOMER]: 'bg-blue-600/20 text-blue-400 border-blue-500/20 animate-pulse',
@@ -574,8 +581,8 @@ ${confirmedEvidences.map((ev, i) =>
     };
     
     return (
-      <span className={`px-4 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-widest ${styles[normalized] || 'bg-slate-800 text-slate-500'}`}>
-        {getOrderStatusLabel(status)}
+      <span className={`px-4 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-widest ${styles[displayStatus] || 'bg-slate-800 text-slate-500'}`}>
+        {displayLabel}
       </span>
     );
   };
@@ -714,7 +721,7 @@ ${confirmedEvidences.map((ev, i) =>
                     {/* Заголовок */}
                     <div className="p-6 border-b border-white/5">
                       <div className="flex flex-wrap items-center gap-3 mb-3">
-                        {getStatusBadge(order.status)}
+                        {getStatusBadge(order)}
                         <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
                           #{order.orderNumber || order.id.slice(0, 8)}
                         </span>

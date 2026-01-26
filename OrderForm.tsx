@@ -31,7 +31,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
     scheduledTime: new Date().toISOString().slice(0, 16),
     status: OrderStatus.NEW_REQUEST,
     managerName: currentUser,
-    isBirzhaOpen: true,
+    isBirzhaOpen: false,
     isFrozen: false,
     evidences: [],
     assignedDrivers: [],
@@ -58,6 +58,10 @@ const OrderForm: React.FC<OrderFormProps> = ({
   // Вычисляемые значения
   const hasDirectOffers = useMemo(() => formData.assetRequirements?.some(r => r.contractorId), [formData.assetRequirements]);
   const hasBirzhaSlots = useMemo(() => formData.assetRequirements?.some(r => !r.contractorId), [formData.assetRequirements]);
+  const hasBirzhaPrices = useMemo(
+    () => (formData.assetRequirements || []).filter(r => !r.contractorId).every(r => (r.contractorPrice || 0) > 0),
+    [formData.assetRequirements]
+  );
   const isApprovedByCustomer = [OrderStatus.SEARCHING_EQUIPMENT, OrderStatus.EQUIPMENT_APPROVED, OrderStatus.EN_ROUTE, OrderStatus.IN_PROGRESS, OrderStatus.COMPLETED].includes(normalizeOrderStatus(formData.status as OrderStatus));
   const pendingBids = useMemo(() => (formData.bids || []).filter(b => b.status === 'pending'), [formData.bids]);
   const unconfirmedEvidences = useMemo(() => (formData.evidences || []).filter(e => !e.confirmed), [formData.evidences]);
@@ -807,7 +811,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
                     onClick={() => smartAction('close_birzha')}
                     className="bg-slate-800 hover:bg-slate-700 text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase shadow-lg"
                   >
-                    🔒 Закрыть биржу
+                    🔒 Закрыть поиск техники
                   </button>
                 )}
                 {hasDirectOffers && !formData.isBirzhaOpen && (
@@ -822,10 +826,17 @@ const OrderForm: React.FC<OrderFormProps> = ({
                 {hasBirzhaSlots && !formData.isBirzhaOpen && (
                   <button
                     type="button"
-                    onClick={() => smartAction('open_birzha')}
-                    className="bg-slate-700 hover:bg-slate-600 text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase shadow-lg"
+                    onClick={() => {
+                      if (!hasBirzhaPrices) return;
+                      smartAction('open_birzha');
+                    }}
+                    disabled={!hasBirzhaPrices}
+                    title={!hasBirzhaPrices ? 'Сначала укажите цену для подрядчика' : undefined}
+                    className={`text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase shadow-lg ${
+                      hasBirzhaPrices ? 'bg-slate-700 hover:bg-slate-600' : 'bg-slate-800/60 cursor-not-allowed'
+                    }`}
                   >
-                    🌐 Открыть биржу
+                    🔍 Поиск техники
                   </button>
                 )}
               </div>
