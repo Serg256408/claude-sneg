@@ -101,6 +101,11 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
     return (order.evidences || []).filter(e => e.confirmed);
   }, []);
 
+  const getCustomerEvidences = useCallback((order: Order) => {
+    const isFinished = normalizeOrderStatus(order.status) === OrderStatus.COMPLETED;
+    return isFinished ? getConfirmedEvidences(order) : (order.evidences || []);
+  }, [getConfirmedEvidences]);
+
   // Для клиента: во время работы показываем ВСЕ рейсы, после завершения — только подтверждённые
   const getCustomerTripsCount = useCallback((order: Order) => {
     const isFinished = normalizeOrderStatus(order.status) === OrderStatus.COMPLETED;
@@ -180,7 +185,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
       items,
       subtotal,
       vat,
-      total
+      total,
+      notes: quote?.notes || ''
     };
   }, [customers]);
 
@@ -779,6 +785,12 @@ ${confirmedEvidences.map((ev, i) =>
                               <span className="text-[10px] uppercase opacity-80">Ориентировочно:</span>
                               <span className="text-xl font-black">{formatPrice(currentQuote.estimatedTotal)}</span>
                             </div>
+                            {currentQuote.notes?.trim() && (
+                              <div className="mt-3 pt-3 border-t border-white/20 text-[10px] text-blue-100">
+                                <div className="uppercase tracking-widest font-black text-[9px] text-blue-200 mb-1">Примечания</div>
+                                <div className="whitespace-pre-wrap">{currentQuote.notes}</div>
+                              </div>
+                            )}
                           </div>
                         )}
 
@@ -845,6 +857,60 @@ ${confirmedEvidences.map((ev, i) =>
                         <div className="text-xl font-black text-green-400">{formatPrice(totals.grandTotal)}</div>
                       </div>
                     </div>
+
+                    {getCustomerEvidences(order).length > 0 && (
+                      <div className="px-6 pb-6">
+                        <div className="text-[10px] font-black text-slate-500 uppercase mb-3">Фото рейсов</div>
+                        <div className="space-y-4">
+                          {getCustomerEvidences(order).slice().reverse().map(ev => {
+                            const allPhotos = ev.photos && ev.photos.length > 0 ? ev.photos : (ev.photo ? [{ url: ev.photo, type: 'other' as const, timestamp: ev.timestamp }] : []);
+                            const photoTypeLabels: Record<string, string> = {
+                              loading: '📦 Погрузка',
+                              full_truck: '🚛 Полный кузов',
+                              unloading: '📤 Выгрузка',
+                              ticket: '🎫 Талон',
+                              other: '📸 Фото'
+                            };
+                            return (
+                              <div key={ev.id} className="bg-white/5 rounded-2xl overflow-hidden border border-white/5">
+                                <div className="p-3 bg-white/5 border-b border-white/5">
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-[10px] font-black text-white uppercase">Рейс #{ev.tripNumber}</span>
+                                    <span className="text-[9px] text-slate-400">{formatDateTime(ev.timestamp)}</span>
+                                  </div>
+                                  {ev.driverName && (
+                                    <div className="text-[9px] text-slate-500 mt-1">Водитель: {ev.driverName}</div>
+                                  )}
+                                </div>
+                                {allPhotos.length > 0 ? (
+                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 p-3">
+                                    {allPhotos.map((photo, idx) => (
+                                      <div key={idx} className="relative rounded-lg overflow-hidden border border-white/10">
+                                        <img
+                                          src={photo.url}
+                                          className="w-full h-24 object-cover"
+                                          alt={`Рейс #${ev.tripNumber} - ${photoTypeLabels[photo.type] || 'Фото'}`}
+                                        />
+                                        <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-[8px] text-white px-1.5 py-0.5 text-center">
+                                          {photoTypeLabels[photo.type] || 'Фото'}
+                                        </div>
+                                        {photo.timestamp && (
+                                          <div className="absolute top-1 right-1 bg-black/60 text-[7px] text-white px-1 py-0.5 rounded">
+                                            {new Date(photo.timestamp).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="p-4 text-center text-[9px] text-slate-500">Нет фото</div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Кнопки действий */}
                     <div className="p-4 bg-white/[0.02] border-t border-white/5 flex flex-col md:flex-row gap-3">
@@ -1137,6 +1203,29 @@ ${confirmedEvidences.map((ev, i) =>
                       </button>
                     </div>
 
+                    {getConfirmedEvidences(order).length > 0 && (
+                      <div className="mt-6">
+                        <div className="text-[10px] font-black text-slate-500 uppercase mb-3">Фото рейсов</div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                          {getConfirmedEvidences(order).slice().reverse().map(ev => (
+                            <div key={ev.id} className="bg-white/5 rounded-2xl overflow-hidden border border-white/5">
+                              <div className="relative">
+                                <img
+                                  src={ev.photos?.[0]?.url || ev.photo}
+                                  className="w-full h-28 object-cover"
+                                  alt={`Рейс #${ev.tripNumber}`}
+                                />
+                                <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[9px] text-white px-2 py-1 flex justify-between">
+                                  <span>Рейс #{ev.tripNumber}</span>
+                                  <span>{formatDateTime(ev.timestamp)}</span>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Обратная связь */}
                     <div className="flex gap-3 pt-4 border-t border-white/5">
                       {order.feedback ? (
@@ -1248,6 +1337,12 @@ ${confirmedEvidences.map((ev, i) =>
                       <span className="font-black">{formatPrice(preview.total)}</span>
                     </div>
                   </div>
+                  {preview.notes?.trim() && (
+                    <div className="mt-6 border-t border-slate-200 pt-4">
+                      <div className="text-[10px] font-black uppercase text-slate-500 mb-2">Примечания</div>
+                      <div className="text-sm whitespace-pre-wrap">{preview.notes}</div>
+                    </div>
+                  )}
                 </div>
               );
             })()}

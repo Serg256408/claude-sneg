@@ -258,7 +258,8 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
 
     // Проверка: нельзя отправлять рейсы после завершения работы
     const completedStatuses = [OrderStatus.COMPLETED, OrderStatus.CANCELLED];
-    if (completedStatuses.includes(normalizeOrderStatus(activeOrder.status))) {
+    const assignmentCompleted = currentDriverAssignment?.status === 'completed';
+    if (assignmentCompleted || completedStatuses.includes(normalizeOrderStatus(activeOrder.status))) {
       alert('❌ Работа завершена. Отправка рейсов невозможна.');
       return;
     }
@@ -271,6 +272,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
       tripNumber,
       driverName,
       timestamp: new Date().toISOString(),
+      assignmentId: currentDriverAssignment?.id,
       coordinates: currentPosition || undefined,
       photos: capturedPhotos,
       photoValidation: {
@@ -282,10 +284,16 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
     };
 
     onReportTrip(activeOrder.id, evidence);
+    if (onUpdateDriverAssignment && currentDriverAssignment?.id && currentDriverAssignment.status !== 'working' && currentDriverAssignment.status !== 'completed') {
+      onUpdateDriverAssignment(activeOrder.id, currentDriverAssignment.id, {
+        status: 'working',
+        startedAt: currentDriverAssignment.startedAt || new Date().toISOString(),
+      });
+    }
     setCapturedPhotos([]);
     setShowPhotoPreview(false);
     alert('✅ Рейс отправлен на проверку!');
-  }, [selectedOrder, capturedPhotos, currentPosition, driverName, orders, onReportTrip]);
+  }, [selectedOrder, capturedPhotos, currentPosition, driverName, orders, onReportTrip, onUpdateDriverAssignment, currentDriverAssignment]);
 
   // Текущий выбранный заказ (обновлённый)
   const activeSelectedOrder = selectedOrder
@@ -293,7 +301,9 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
     : null;
 
   const driverEvidences = activeSelectedOrder
-    ? (activeSelectedOrder.evidences || []).filter(e => e.driverName === driverName)
+    ? (activeSelectedOrder.evidences || []).filter(e =>
+        currentDriverAssignment?.id ? e.assignmentId === currentDriverAssignment.id : e.driverName === driverName
+      )
     : [];
 
   const confirmedCount = driverEvidences.filter(e => e.confirmed).length;
@@ -591,7 +601,10 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
 
               {/* Проверка на завершение работы */}
               {(() => {
-                const isWorkCompleted = [OrderStatus.COMPLETED, OrderStatus.CANCELLED].includes(normalizeOrderStatus(activeSelectedOrder.status));
+                const assignmentCompleted = currentDriverAssignment?.status === 'completed';
+                const isWorkCompleted =
+                  assignmentCompleted ||
+                  [OrderStatus.COMPLETED, OrderStatus.CANCELLED].includes(normalizeOrderStatus(activeSelectedOrder.status));
                 // Проверяем назначение по contractorId или driverName
                 const isAssigned = (activeSelectedOrder.driverDetails || []).some(d => 
                   driverContractorId ? d.contractorId === driverContractorId : d.driverName === driverName
@@ -841,11 +854,12 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                   {/* Кнопка завершения */}
                   <button 
                     onClick={() => { 
-                      if (selectedOrder?.type !== AssetType.TRUCK && loaderShiftStarted && !loaderEndTime) {
-                        alert('Укажите время окончания смены');
-                        return;
-                      }
                       if (confirm('Завершить работу на этом объекте?')) { 
+                        if (selectedOrder?.type !== AssetType.TRUCK && loaderShiftStarted && !loaderEndTime) {
+                          const endTime = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+                          setInputEndTime(endTime);
+                          saveLoaderShiftTime('shiftEndTime', endTime);
+                        }
                         if (onUpdateDriverAssignment && currentDriverAssignment) {
                           markAssignmentStatus('completed');
                         } else {

@@ -64,6 +64,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
   );
   const isApprovedByCustomer = [OrderStatus.SEARCHING_EQUIPMENT, OrderStatus.EQUIPMENT_APPROVED, OrderStatus.EN_ROUTE, OrderStatus.IN_PROGRESS, OrderStatus.COMPLETED].includes(normalizeOrderStatus(formData.status as OrderStatus));
   const pendingBids = useMemo(() => (formData.bids || []).filter(b => b.status === 'pending'), [formData.bids]);
+  const isOrderCompleted = normalizeOrderStatus(formData.status as OrderStatus) === OrderStatus.COMPLETED;
   const unconfirmedEvidences = useMemo(() => (formData.evidences || []).filter(e => !e.confirmed), [formData.evidences]);
   const confirmedEvidences = useMemo(() => (formData.evidences || []).filter(e => e.confirmed), [formData.evidences]);
 
@@ -493,21 +494,31 @@ const OrderForm: React.FC<OrderFormProps> = ({
               </h4>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {pendingBids.map((bid) => (
-                <div key={bid.id} className="bg-white/5 p-4 rounded-xl flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl">{bid.assetType === AssetType.LOADER ? '🚜' : '🚛'}</span>
-                    <div>
-                      <div className="text-sm font-black">{bid.driverName}</div>
-                      <div className="text-[14px] text-green-400">{formatPrice(bid.proposedPrice)} • {bid.estimatedArrival}</div>
+              {pendingBids.map((bid) => {
+                const assetLabel = bid.assetType === AssetType.LOADER
+                  ? 'Погрузчик'
+                  : bid.assetType === AssetType.MINI_LOADER
+                    ? 'Мини-погрузчик'
+                    : 'Самосвал';
+                return (
+                  <div key={bid.id} className="bg-white/5 p-4 rounded-xl flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-2xl">{bid.assetType === AssetType.LOADER ? '🚜' : '🚛'}</span>
+                        <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">{assetLabel}</span>
+                      </div>
+                      <div>
+                        <div className="text-sm font-black">{bid.driverName}</div>
+                        <div className="text-[14px] text-green-400">{formatPrice(bid.proposedPrice)} • {bid.estimatedArrival}</div>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => rejectBid(bid)} className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg">✕</button>
+                      <button type="button" onClick={() => approveBid(bid)} className="bg-green-600 text-white px-4 py-2 rounded-lg text-[14px] font-black uppercase">✓</button>
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <button type="button" onClick={() => rejectBid(bid)} className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg">✕</button>
-                    <button type="button" onClick={() => approveBid(bid)} className="bg-green-600 text-white px-4 py-2 rounded-lg text-[14px] font-black uppercase">✓</button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -654,7 +665,44 @@ const OrderForm: React.FC<OrderFormProps> = ({
                 <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5">
                   <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">Назначенная техника</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {(formData.driverDetails || []).map((driver, i) => (
+                  {(formData.driverDetails || []).map((driver, i) => {
+                    const driverTrips = (formData.evidences || []).filter(ev =>
+                      driver.id ? ev.assignmentId === driver.id : ev.driverName === driver.driverName
+                    );
+                    const confirmedTrips = driverTrips.filter(ev => ev.confirmed);
+                    const pricePerUnit = driver.assignedPrice
+                      || formData.assetRequirements.find(r => r.type === driver.assetType)?.contractorPrice
+                      || 0;
+                    const isLoader = [
+                      AssetType.LOADER,
+                      AssetType.MINI_LOADER,
+                      AssetType.LOADER_JCB,
+                      AssetType.FRONT_LOADER
+                    ].includes(driver.assetType);
+                    const tripsLabel = `${driverTrips.length} рейсов`;
+                    const confirmedLabel = confirmedTrips.length > 0 ? ` (${confirmedTrips.length} подтверждено)` : '';
+                    const tripPriceLabel = pricePerUnit > 0 ? ` • ${formatPrice(pricePerUnit)}/рейс` : '';
+                    const formatShiftTime = (value?: string) => {
+                      if (!value) return '—';
+                      if (/^\d{1,2}:\d{2}/.test(value)) {
+                        const [hh, mm] = value.split(':');
+                        return `${hh.padStart(2, '0')}:${mm}`;
+                      }
+                      const parsed = new Date(value);
+                      return Number.isNaN(parsed.getTime())
+                        ? value
+                        : parsed.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+                    };
+                    const shiftLabel = `Смена 7+1: ${formatShiftTime(driver.shiftStartTime)}–${formatShiftTime(driver.shiftEndTime)}`;
+                    const shiftPriceLabel = pricePerUnit > 0 ? ` • ${formatPrice(pricePerUnit)}/смена` : '';
+
+                    const totalTrips = driverTrips.length;
+                    const totalAmount = isLoader ? pricePerUnit : totalTrips * pricePerUnit;
+                    const totalLabel = isLoader
+                      ? `Итого: ${formatPrice(totalAmount)} (смена${pricePerUnit ? ` × ${formatPrice(pricePerUnit)}` : ''})`
+                      : `Итого: ${formatPrice(totalAmount)} (${totalTrips} рейсов${pricePerUnit ? ` × ${formatPrice(pricePerUnit)}` : ''})`;
+
+                    return (
                       <div key={i} className="flex items-center justify-between bg-white/5 p-4 rounded-xl">
                         <div className="flex items-center gap-3">
                           <span className="text-2xl">{driver.assetType === AssetType.LOADER ? '🚜' : '🚛'}</span>
@@ -662,6 +710,18 @@ const OrderForm: React.FC<OrderFormProps> = ({
                             <div className="text-sm font-black">{driver.driverName}</div>
                             <div className="text-[14px] text-slate-500">
                               {driver.assetType === AssetType.LOADER ? 'Погрузчик' : driver.assetType === AssetType.MINI_LOADER ? 'Мини-погрузчик' : 'Самосвал'} • {driver.contractorName || 'Частный'}
+                              {(driverTrips.length > 0 || driver.shiftStartTime || driver.shiftEndTime) && (
+                                <div className="text-[12px] text-slate-400 mt-1">
+                                  {isLoader
+                                    ? `Водитель: ${shiftLabel}${shiftPriceLabel}`
+                                    : `Водитель: ${tripsLabel}${confirmedLabel}${tripPriceLabel}`}
+                                </div>
+                              )}
+                              {isOrderCompleted && (driverTrips.length > 0 || driver.shiftStartTime || driver.shiftEndTime) && (
+                                <div className="text-[12px] text-slate-300 mt-1 font-black">
+                                  {totalLabel}
+                                </div>
+                              )}
                           </div>
                         </div>
                         </div>
@@ -673,7 +733,8 @@ const OrderForm: React.FC<OrderFormProps> = ({
                           {driver.status || 'Назначен'}
                         </div>
                       </div>
-                    ))}
+                    );
+                  })}
                   </div>
                 </div>
               )}
