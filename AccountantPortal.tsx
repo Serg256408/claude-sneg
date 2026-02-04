@@ -36,7 +36,7 @@ export default function AccountantPortal({
   currentUserId,
   currentUserName,
 }: AccountantPortalProps) {
-  const [activeTab, setActiveTab] = useState<'pending_invoices' | 'pending_payments' | 'closing_docs' | 'contracts'>('pending_invoices');
+  const [activeTab, setActiveTab] = useState<'pending_invoices' | 'pending_payments' | 'closing_docs' | 'contracts' | 'completed'>('pending_invoices');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [showInvoiceForm, setShowInvoiceForm] = useState(false);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
@@ -60,9 +60,18 @@ export default function AccountantPortal({
   // Заказы, требующие закрывающих документов
   const ordersNeedingClosingDocs = useMemo(() => {
     return orders.filter(o =>
-      (o.status === OrderStatus.EXPORT_COMPLETED || o.status === OrderStatus.AWAITING_CLOSING_DOCS) &&
-      !o.closingDocs
+      [
+        OrderStatus.EXPORT_COMPLETED,
+        OrderStatus.AWAITING_CLOSING_DOCS,
+        OrderStatus.CLOSING_DOCS_SENT,
+        OrderStatus.REPORT_READY,
+      ].includes(o.status) &&
+      !o.isPaid
     );
+  }, [orders]);
+
+  const completedOrders = useMemo(() => {
+    return orders.filter(o => o.status === OrderStatus.COMPLETED);
   }, [orders]);
 
   // Заказы, требующие договоров
@@ -159,11 +168,29 @@ export default function AccountantPortal({
         : inv
     );
 
+    const updatedPayments = [...(selectedOrder.payments || []), payment];
+    const totalPaid = updatedPayments
+      .filter(p => p.status === 'completed')
+      .reduce((sum, p) => sum + (p.amount || 0), 0);
+    const requiredTotal = selectedOrder.totalCustomerPrice || invoice.amount || 0;
+    const isFullyPaid = requiredTotal > 0 ? totalPaid >= requiredTotal : totalPaid > 0;
+    const isClosingDocsStage = [
+      OrderStatus.EXPORT_COMPLETED,
+      OrderStatus.AWAITING_CLOSING_DOCS,
+      OrderStatus.CLOSING_DOCS_SENT,
+      OrderStatus.REPORT_READY,
+    ].includes(selectedOrder.status);
+    const nextStatus = isFullyPaid && isClosingDocsStage
+      ? OrderStatus.COMPLETED
+      : selectedOrder.status === OrderStatus.AWAITING_PREPAYMENT
+        ? OrderStatus.SCHEDULING
+        : selectedOrder.status;
+
     onUpdateOrder(selectedOrder.id, {
-      payments: [...(selectedOrder.payments || []), payment],
+      payments: updatedPayments,
       invoices: updatedInvoices,
-      isPaid: true,
-      status: OrderStatus.SCHEDULING,
+      isPaid: isFullyPaid,
+      status: nextStatus,
     });
 
     setShowPaymentForm(false);
@@ -226,6 +253,41 @@ export default function AccountantPortal({
     });
   };
 
+  const handleMarkOrderPaid = (order: Order) => {
+    const totalPaid = (order.payments || [])
+      .filter(p => p.status === 'completed')
+      .reduce((sum, p) => sum + (p.amount || 0), 0);
+    const requiredTotal = order.totalCustomerPrice || 0;
+    const remaining = Math.max(0, requiredTotal - totalPaid);
+    const now = new Date().toISOString();
+    const payment: Payment | null = remaining > 0
+      ? {
+          id: generateId(),
+          invoiceId: order.invoices?.[0]?.id || '',
+          orderId: order.id,
+          amount: remaining,
+          method: 'bank_transfer',
+          status: 'completed',
+          transactionId: 'manual_confirm',
+          createdAt: now,
+          completedAt: now,
+        }
+      : null;
+
+    const isClosingDocsStage = [
+      OrderStatus.EXPORT_COMPLETED,
+      OrderStatus.AWAITING_CLOSING_DOCS,
+      OrderStatus.CLOSING_DOCS_SENT,
+      OrderStatus.REPORT_READY,
+    ].includes(order.status);
+
+    onUpdateOrder(order.id, {
+      isPaid: true,
+      payments: payment ? [...(order.payments || []), payment] : order.payments,
+      status: isClosingDocsStage ? OrderStatus.COMPLETED : order.status,
+    });
+  };
+
   const getInvoiceStatusColor = (status: InvoiceStatus) => {
     switch (status) {
       case InvoiceStatus.ISSUED: return 'bg-blue-100 text-blue-800';
@@ -284,6 +346,12 @@ export default function AccountantPortal({
           onClick={() => setActiveTab('closing_docs')}
         >
           Закрывающие ({ordersNeedingClosingDocs.length})
+        </button>
+        <button
+          className={`px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap ${activeTab === 'completed' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200'}`}
+          onClick={() => setActiveTab('completed')}
+        >
+          Завершённые ({completedOrders.length})
         </button>
       </div>
 
@@ -425,12 +493,58 @@ export default function AccountantPortal({
                     </div>
                     <div className="text-right">
                       <div className="text-xl font-black">{formatPrice(order.totalCustomerPrice || 0)}</div>
-                      <button
-                        className="mt-2 px-4 py-2 bg-teal-600 text-white rounded-xl text-sm font-bold"
-                        onClick={() => handleCreateClosingDocs(order)}
-                      >
-                        Сформировать акт
-                      </button>
+                      <div className="mt-2 flex flex-col gap-2 items-end">
+                        <button
+                          className="px-4 py-2 bg-teal-600 text-white rounded-xl text-sm font-bold"
+                          onClick={() => handleCreateClosingDocs(order)}
+                          disabled={!!order.closingDocs}
+                        >
+                          {order.closingDocs ? 'Акт сформирован' : 'Сформировать акт'}
+                        </button>
+                        {order.isPaid ? (
+                          <span className="px-3 py-1 rounded-full text-xs font-bold bg-green-100 text-green-700">
+                            Оплачено
+                          </span>
+                        ) : (
+                          <button
+                            className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold"
+                            onClick={() => handleMarkOrderPaid(order)}
+                          >
+                            Подтвердить оплату
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Завершённые */}
+        {activeTab === 'completed' && (
+          <>
+            <h2 className="text-xl font-black mb-4">Завершённые заказы</h2>
+            {completedOrders.length === 0 ? (
+              <div className="text-center text-slate-400 py-8">Нет завершённых заказов</div>
+            ) : (
+              <div className="space-y-3">
+                {completedOrders.map(order => (
+                  <div
+                    key={order.id}
+                    className="border border-slate-100 rounded-xl p-4 flex items-center justify-between"
+                  >
+                    <div>
+                      <div className="font-bold">{order.orderNumber}</div>
+                      <div className="text-sm text-slate-500">{order.customer}</div>
+                      <div className="text-xs text-slate-400">{order.address}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xl font-black">{formatPrice(order.totalCustomerPrice || 0)}</div>
+                      <span className="mt-2 inline-block px-3 py-1 rounded-full text-xs font-bold bg-green-100 text-green-700">
+                        Оплачено
+                      </span>
                     </div>
                   </div>
                 ))}

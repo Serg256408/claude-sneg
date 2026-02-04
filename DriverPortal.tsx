@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Order, OrderStatus, TripEvidence, Contractor, AssetType, DriverAssignment, formatPrice, formatDateTime, generateId, DateRange, isOrderInDateRange, normalizeOrderStatus, getOrderStatusLabel, calculateAssignmentEarnings, PriceUnit } from './types';
+import { Order, OrderStatus, TripEvidence, Contractor, AssetType, DriverAssignment, formatPrice, formatDateTime, generateId, DateRange, isOrderInDateRange, normalizeOrderStatus, getOrderStatusLabel, calculateAssignmentEarnings, PriceUnit, isLoaderType, getShiftHours } from './types';
 
 interface DriverPortalProps {
   orders: Order[];
@@ -11,6 +11,7 @@ interface DriverPortalProps {
   onFinishWork: (orderId: string) => void;
   onUpdateDriverAssignment?: (orderId: string, driverAssignmentId: string, updates: Partial<DriverAssignment>) => void;
   embedded?: boolean;
+  hideCompletedAssignments?: boolean;
 }
 
 interface GeoPosition {
@@ -28,7 +29,8 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
   onAcceptJob,
   onFinishWork,
   onUpdateDriverAssignment,
-  embedded = false
+  embedded = false,
+  hideCompletedAssignments = false
 }) => {
   const [selectedOrder, setSelectedOrder] = useState<{ order: Order; type: AssetType } | null>(null);
   const [activeTab, setActiveTab] = useState<'mine' | 'public' | 'company' | 'earnings'>('mine');
@@ -48,6 +50,12 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
 
   
   // Получаем текущее назначение водителя из выбранного заказа (для погрузчика)
+  const formatHours = (value: number) => {
+    if (!Number.isFinite(value) || value <= 0) return '0';
+    const rounded = Math.round(value * 10) / 10;
+    return rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1);
+  };
+
   const currentDriverAssignment = useMemo(() => {
     if (!selectedOrder) return null;
     return (selectedOrder.order.driverDetails || []).find(d => 
@@ -74,6 +82,32 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
   // Отображаемое время: сохранённое или вводимое
   const loaderStartTime = loaderShiftStarted ? savedLoaderStartTime : inputStartTime;
   const loaderEndTime = loaderShiftStarted ? (inputEndTime || savedLoaderEndTime) : '';
+
+  const loaderPricing = useMemo(() => {
+    if (!selectedOrder || !currentDriverAssignment || !isLoaderType(selectedOrder.type)) {
+      return null;
+    }
+    const pricePerUnit = currentDriverAssignment.assignedPrice || 0;
+    const isHourly = currentDriverAssignment.priceUnit === PriceUnit.PER_HOUR;
+    const shiftHours = loaderStartTime && loaderEndTime ? getShiftHours(loaderStartTime, loaderEndTime, 'confirmed') : 0;
+    const hourlyRate = isHourly ? pricePerUnit : pricePerUnit / 8;
+    const computedByHours = shiftHours > 0 ? hourlyRate * shiftHours : 0;
+    const computedTotal = isHourly
+      ? computedByHours
+      : shiftHours > 7
+        ? Math.max(pricePerUnit, computedByHours)
+        : pricePerUnit;
+    return {
+      pricePerUnit,
+      isHourly,
+      shiftHours,
+      hourlyRate,
+      computedByHours,
+      computedTotal,
+      hasStart: !!loaderStartTime,
+      hasEnd: !!loaderEndTime
+    };
+  }, [selectedOrder, currentDriverAssignment, loaderStartTime, loaderEndTime]);
   
   // Функция сохранения времени смены погрузчика
   const saveLoaderShiftTime = useCallback((field: 'shiftStartTime' | 'shiftEndTime', value: string) => {
@@ -127,12 +161,16 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
       const myAssignments = (o.driverDetails || []).filter(d => 
         driverContractorId ? d.contractorId === driverContractorId : d.driverName === driverName
       );
-      myAssignments.forEach(assignment => {
+      myAssignments
+        .filter(assignment =>
+          hideCompletedAssignments ? !['completed', 'cancelled'].includes(assignment.status) : true
+        )
+        .forEach(assignment => {
         jobs.push({ order: o, type: assignment.assetType, driverDetail: assignment });
       });
     });
     return jobs;
-  }, [orders, driverName, driverContractorId]);
+  }, [orders, driverName, driverContractorId, hideCompletedAssignments]);
 
   // Публичная биржа
   const publicBoard = useMemo(() => {
@@ -316,6 +354,22 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
       confirmed: earnings.confirmedAmount
     };
   }, [activeSelectedOrder, driverName]);
+
+  const loaderHoursLabel = loaderPricing?.hasEnd ? `${formatHours(loaderPricing.shiftHours)} ч` : '—';
+  const loaderHourlyRateLabel = loaderPricing ? `${formatPrice(loaderPricing.hourlyRate)}/ч` : '';
+  const loaderShiftRateLabel =
+    loaderPricing && !loaderPricing.isHourly
+      ? `${formatPrice(loaderPricing.pricePerUnit)}/смена`
+      : '';
+  const loaderCalcLabel = loaderPricing
+    ? loaderPricing.hasEnd
+      ? loaderPricing.isHourly
+        ? `${loaderHoursLabel} × ${loaderHourlyRateLabel}`
+        : `max(${loaderShiftRateLabel}, ${loaderHourlyRateLabel} × ${loaderHoursLabel})`
+      : loaderPricing.hasStart
+        ? 'Смена в процессе, итог после завершения'
+        : 'Смена ещё не начата'
+    : '';
 
   const photoTypeLabels = {
     loading: '📦 Погрузка',
@@ -577,20 +631,53 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
 
               {/* Карточка заработка */}
               <div className="bg-gradient-to-r from-green-600/20 to-blue-600/20 p-4 rounded-2xl border border-white/10 mb-6">
-                <div className="grid grid-cols-3 gap-4 text-center">
-                  <div>
-                    <div className="text-xl font-black text-white">{driverEvidences.length}</div>
-                    <div className="text-[8px] text-slate-400 uppercase">Рейсов</div>
+                {loaderPricing ? (
+                  <div className="grid grid-cols-3 gap-4 text-center">
+                    <div>
+                      <div className="text-xl font-black text-white">{loaderStartTime || '—'}</div>
+                      <div className="text-[8px] text-slate-400 uppercase">Начало</div>
+                    </div>
+                    <div>
+                      <div className={`text-xl font-black ${loaderEndTime ? 'text-green-400' : 'text-slate-300'}`}>
+                        {loaderEndTime || '—'}
+                      </div>
+                      <div className="text-[8px] text-slate-400 uppercase">Конец</div>
+                    </div>
+                    <div>
+                      <div className="text-xl font-black text-green-400">{loaderHoursLabel}</div>
+                      <div className="text-[8px] text-slate-400 uppercase">Часы</div>
+                    </div>
                   </div>
-                  <div>
-                    <div className="text-xl font-black text-green-400">{confirmedCount}</div>
-                    <div className="text-[8px] text-slate-400 uppercase">Засчитано</div>
+                ) : (
+                  <div className="grid grid-cols-3 gap-4 text-center">
+                    <div>
+                      <div className="text-xl font-black text-white">{driverEvidences.length}</div>
+                      <div className="text-[8px] text-slate-400 uppercase">Рейсов</div>
+                    </div>
+                    <div>
+                      <div className="text-xl font-black text-green-400">{confirmedCount}</div>
+                      <div className="text-[8px] text-slate-400 uppercase">Засчитано</div>
+                    </div>
+                    <div>
+                      <div className="text-xl font-black text-yellow-400">{pendingCount}</div>
+                      <div className="text-[8px] text-slate-400 uppercase">На проверке</div>
+                    </div>
                   </div>
-                  <div>
-                    <div className="text-xl font-black text-yellow-400">{pendingCount}</div>
-                    <div className="text-[8px] text-slate-400 uppercase">На проверке</div>
-                  </div>
-                </div>
+                )}
+
+                {loaderPricing && (
+                  <>
+                    <div className="mt-3 text-[8px] text-slate-400 uppercase flex flex-wrap items-center justify-between gap-2">
+                      <span>Часы: {loaderHoursLabel}</span>
+                      <span>Цена часа: {loaderHourlyRateLabel}</span>
+                      {loaderShiftRateLabel && <span>Цена смены: {loaderShiftRateLabel}</span>}
+                    </div>
+                    <div className="text-[8px] text-slate-500 uppercase mt-1">
+                      Расчёт: {loaderCalcLabel}
+                      {loaderPricing.hasEnd ? ` = ${formatPrice(loaderPricing.computedTotal)}` : ''}
+                    </div>
+                  </>
+                )}
                 <div className="mt-4 pt-4 border-t border-white/10 flex justify-between">
                   <div>
                     <div className="text-[8px] text-slate-500 uppercase">Предварительно</div>

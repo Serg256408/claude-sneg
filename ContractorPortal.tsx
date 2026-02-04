@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { Order, OrderStatus, AssetType, Contractor, Bid, DriverAssignment, formatPrice, formatDateTime, generateId, PriceUnit, TripEvidence, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateAssignmentEarnings, isLoaderType } from './types';
+import { Order, OrderStatus, AssetType, Contractor, Bid, DriverAssignment, formatPrice, formatDateTime, generateId, PriceUnit, TripEvidence, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateAssignmentEarnings, isLoaderType, getShiftHours } from './types';
 import DriverPortal from './DriverPortal';
 
 interface ContractorPortalProps {
@@ -29,7 +29,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
   onFinishWork,
   onUpdateDriverAssignment
 }) => {
-  const [activeTab, setActiveTab] = useState<'available' | 'direct' | 'active' | 'earnings' | 'driver'>('available');
+  const [activeTab, setActiveTab] = useState<'available' | 'direct' | 'active' | 'earnings' | 'driver' | 'history'>('available');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const getDefaultArrivalTime = () => new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 16);
   const [bidForm, setBidForm] = useState({
@@ -110,6 +110,20 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
     return myBids.filter(entry => isOrderInDateRange(entry.order, dateRange));
   }, [myBids, dateRange]);
 
+  const driverOrdersInWork = useMemo(() => {
+    return orders.filter(order => {
+      if (normalizeOrderStatus(order.status) === OrderStatus.CANCELLED) return false;
+      const myAssignments = (order.driverDetails || []).filter(d => d.contractorId === currentContractorId);
+      if (myAssignments.length === 0) return false;
+      return myAssignments.some(d => d.status !== 'completed' && d.status !== 'cancelled');
+    });
+  }, [orders, currentContractorId]);
+
+  const filteredDriverOrdersInWork = useMemo(() => {
+    return driverOrdersInWork.filter(order => isOrderInDateRange(order, dateRange));
+  }, [driverOrdersInWork, dateRange]);
+
+
   const getUnitLabel = (unit: PriceUnit) => {
     if (unit === PriceUnit.PER_SHIFT) return 'смена';
     if (unit === PriceUnit.PER_HOUR) return 'час';
@@ -120,6 +134,12 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
     if (unit === PriceUnit.PER_SHIFT) return 'смен';
     if (unit === PriceUnit.PER_HOUR) return 'часов';
     return 'рейсов';
+  };
+
+  const formatHours = (value: number) => {
+    if (!Number.isFinite(value) || value <= 0) return '0';
+    const rounded = Math.round(value * 10) / 10;
+    return rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1);
   };
 
   const getEffectivePriceUnit = (assignment: DriverAssignment) => {
@@ -229,6 +249,18 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
         return bTime - aTime;
       });
   }, [orders, currentContractorId]);
+
+  const historyByOrder = useMemo(() => {
+    return earningsByOrder.filter(entry => {
+      const myRows = entry.driverRows.filter(row => row.driver.contractorId === currentContractorId);
+      if (myRows.length === 0) return false;
+      return myRows.every(row => row.driver.status === 'completed');
+    });
+  }, [earningsByOrder, currentContractorId]);
+
+  const filteredHistoryByOrder = useMemo(() => {
+    return historyByOrder.filter(entry => isOrderInDateRange(entry.order, dateRange));
+  }, [historyByOrder, dateRange]);
 
   // Количество единиц техники в работе (всего)
   const activeEquipmentCount = useMemo(() => {
@@ -429,7 +461,15 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
               activeTab === 'driver' ? 'bg-indigo-600 text-white shadow-xl' : 'text-slate-500'
             }`}
           >
-            🚛 Рейсы
+            🚛 Рейсы {filteredDriverOrdersInWork.length > 0 && `(${filteredDriverOrdersInWork.length})`}
+          </button>
+          <button 
+            onClick={() => setActiveTab('history')} 
+            className={`flex-1 py-2.5 text-[8px] font-black uppercase rounded-lg transition-all whitespace-nowrap px-3 ${
+              activeTab === 'history' ? 'bg-slate-700 text-white shadow-xl' : 'text-slate-500'
+            }`}
+          >
+            🕘 История {filteredHistoryByOrder.length > 0 && `(${filteredHistoryByOrder.length})`}
           </button>
         </div>
       </div>
@@ -988,6 +1028,32 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                       {entry.driverRows.map(row => {
                         const statusInfo = getDriverStatusInfo(row.driver.status);
                         const totalUnits = row.earnings.confirmedUnits + row.earnings.pendingUnits;
+                        const isLoaderAssignment = isLoaderType(row.driver.assetType);
+                        const shiftHours = isLoaderAssignment
+                          ? getShiftHours(row.driver.shiftStartTime, row.driver.shiftEndTime, 'confirmed')
+                          : 0;
+                        const hourlyRate = isLoaderAssignment
+                          ? (row.driver.priceUnit === PriceUnit.PER_HOUR ? row.earnings.pricePerUnit : row.earnings.pricePerUnit / 8)
+                          : 0;
+                        const hoursLabel = row.driver.shiftEndTime
+                          ? `${formatHours(shiftHours)} ч`
+                          : row.driver.shiftStartTime
+                            ? 'смена в процессе'
+                            : '—';
+                        const hourlyRateLabel = isLoaderAssignment ? `${formatPrice(hourlyRate)}/ч` : '';
+                        const shiftRateLabel =
+                          isLoaderAssignment && row.driver.priceUnit !== PriceUnit.PER_HOUR
+                            ? `${formatPrice(row.earnings.pricePerUnit)}/смена`
+                            : '';
+                        const calcLabel = isLoaderAssignment
+                          ? row.driver.shiftEndTime
+                            ? row.driver.priceUnit === PriceUnit.PER_HOUR
+                              ? `${hourlyRateLabel} × ${hoursLabel} = ${formatPrice(row.earnings.confirmedAmount)}`
+                              : `max(${shiftRateLabel}, ${hourlyRateLabel} × ${hoursLabel}) = ${formatPrice(row.earnings.confirmedAmount)}`
+                            : row.driver.shiftStartTime
+                              ? 'Смена в процессе, итог после завершения'
+                              : ''
+                          : '';
                         return (
                           <div key={row.driver.id} className="flex flex-wrap items-center justify-between gap-3 bg-white/5 p-3 rounded-xl">
                             <div>
@@ -995,6 +1061,19 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                               <div className="text-[9px] text-slate-500">
                                 {row.driver.assetType} • {formatPrice(row.earnings.pricePerUnit)} / {row.unitLabel}
                               </div>
+                              {isLoaderAssignment && (
+                                <>
+                                  <div className="text-[9px] text-slate-400 mt-0.5">
+                                    Часы: {hoursLabel} • Цена часа: {hourlyRateLabel}
+                                    {shiftRateLabel && ` • База: ${shiftRateLabel}`}
+                                  </div>
+                                  {calcLabel && (
+                                    <div className="text-[9px] text-slate-500 mt-0.5">
+                                      Расчёт: {calcLabel}
+                                    </div>
+                                  )}
+                                </>
+                              )}
                             </div>
                             <div className="text-[9px] text-slate-400">
                               Подтверждено: {row.earnings.confirmedUnits} {row.unitPlural} • На проверке: {row.earnings.pendingUnits} {row.unitPlural} • Всего: {totalUnits} {row.unitPlural}
@@ -1038,11 +1117,56 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
           </div>
         )}
 
+        {/* === ИСТОРИЯ === */}
+        {activeTab === 'history' && (
+          <div className="space-y-4 animate-in fade-in">
+            {filteredHistoryByOrder.length === 0 ? (
+              <div className="text-center py-20 opacity-20">
+                <div className="text-6xl mb-4">🕘</div>
+                <div className="text-[10px] font-black uppercase tracking-[0.4em]">Нет завершённых рейсов</div>
+              </div>
+            ) : (
+              filteredHistoryByOrder.map(entry => (
+                <div key={entry.order.id} className="bg-[#12192c] p-5 rounded-2xl border border-white/5">
+                  <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
+                    <div>
+                      <div className="text-[9px] font-black text-blue-400 uppercase tracking-widest mb-1">{entry.order.customer}</div>
+                      <div className="text-lg font-black">{entry.order.address}</div>
+                      <div className="text-[9px] text-slate-500">Подача: {formatDateTime(entry.order.scheduledTime)}</div>
+                    </div>
+                    <div className="flex flex-col items-end gap-2">
+                      <div className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase ${entry.statusClass}`}>
+                        {getOrderStatusLabel(entry.order.status)}
+                      </div>
+                      <div className="text-[9px] text-slate-400">Техника: {entry.driverRows.length}</div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="bg-white/5 p-3 rounded-xl">
+                      <div className="text-[8px] uppercase text-slate-500">Подтверждено</div>
+                      <div className="text-lg font-black text-green-400">{formatPrice(entry.totals.confirmed)}</div>
+                    </div>
+                    <div className="bg-white/5 p-3 rounded-xl">
+                      <div className="text-[8px] uppercase text-slate-500">На проверке</div>
+                      <div className="text-lg font-black text-yellow-300">{formatPrice(entry.totals.pending)}</div>
+                    </div>
+                    <div className="bg-white/5 p-3 rounded-xl">
+                      <div className="text-[8px] uppercase text-slate-500">Всего</div>
+                      <div className="text-lg font-black">{formatPrice(entry.totals.confirmed + entry.totals.pending)}</div>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
         {/* === РЕЙСЫ (ВОДИТЕЛЬ) === */}
         {activeTab === 'driver' && (
           <div className="animate-in fade-in">
             <DriverPortal
-              orders={orders}
+              orders={filteredDriverOrdersInWork}
               contractors={contractors}
               driverName={driverName}
               driverContractorId={currentContractorId}
@@ -1051,6 +1175,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
               onFinishWork={onFinishWork}
               onUpdateDriverAssignment={onUpdateDriverAssignment}
               embedded
+              hideCompletedAssignments
             />
           </div>
         )}

@@ -69,11 +69,19 @@ const OrderForm: React.FC<OrderFormProps> = ({
     (formData.driverDetails || []).every(d => d.status === 'completed');
   const unconfirmedEvidences = useMemo(() => (formData.evidences || []).filter(e => !e.confirmed), [formData.evidences]);
   const confirmedEvidences = useMemo(() => (formData.evidences || []).filter(e => e.confirmed), [formData.evidences]);
+  const totalPaid = useMemo(() => {
+    return (formData.payments || [])
+      .filter(p => p.status === 'completed')
+      .reduce((sum, p) => sum + (p.amount || 0), 0);
+  }, [formData.payments]);
 
   // Расчёт итогов
   const totals = useMemo(() => {
     return calculateOrderTotals(formData as Order, { mode: 'actual_or_planned', includeCharges: true });
   }, [formData.assetRequirements, formData.driverDetails, formData.evidences, formData.plannedTrips, formData.status]);
+  const requiredPayment = (formData.totalCustomerPrice || totals.customerTotal || 0);
+  const isFullyPaid = requiredPayment > 0 ? totalPaid >= requiredPayment : totalPaid > 0;
+  const isPaymentConfirmed = !!formData.isPaid || isFullyPaid;
 
   // Логирование действий
   const createActionLog = useCallback((action: string, actionType: ActionLog['actionType'], prevValue?: string, newValue?: string) => ({
@@ -161,6 +169,21 @@ const OrderForm: React.FC<OrderFormProps> = ({
     const updatedBids = [...bidsArray];
     updatedBids[bidIndex] = { ...bid, status: 'accepted' };
 
+    let requirementUpdated = false;
+    const updatedRequirements = (formData.assetRequirements || []).map(req => {
+      if (requirementUpdated) return req;
+      if (req.type !== bid.assetType) return req;
+      if (req.contractorId && req.contractorId !== bid.contractorId) return req;
+      requirementUpdated = true;
+      return {
+        ...req,
+        contractorId: bid.contractorId,
+        contractorName: bid.contractorName || req.contractorName,
+        contractorPrice: bid.proposedPrice,
+        priceUnit: bid.priceUnit || req.priceUnit
+      };
+    });
+
     const newDriverDetail = {
       id: generateId(),
       orderId: formData.id || '',
@@ -179,6 +202,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
     const updated = {
       ...formData,
       bids: updatedBids,
+      assetRequirements: updatedRequirements,
       driverDetails: [...(formData.driverDetails || []), newDriverDetail],
       assignedDrivers: [...(formData.assignedDrivers || []), bid.driverName],
       status: normalizeOrderStatus(formData.status as OrderStatus) === OrderStatus.SEARCHING_EQUIPMENT ? OrderStatus.EQUIPMENT_APPROVED : formData.status,
@@ -286,8 +310,12 @@ const OrderForm: React.FC<OrderFormProps> = ({
       logAction('Отправлены персональные предложения подрядчикам', 'other');
       alert('📨 Уведомления отправлены подрядчикам!');
     } else if (action === 'change_status' && newStatus) {
-      if (newStatus === OrderStatus.COMPLETED && !allDriversCompleted) {
+      if ([OrderStatus.COMPLETED, OrderStatus.AWAITING_CLOSING_DOCS].includes(newStatus) && !allDriversCompleted) {
         alert('Завершить вывоз можно только после того, как вся техника завершила работу.');
+        return;
+      }
+      if (newStatus === OrderStatus.COMPLETED && !isPaymentConfirmed) {
+        alert('Завершить сделку можно только после поступления доплаты.');
         return;
       }
       const prevStatus = updated.status;
@@ -627,7 +655,10 @@ const OrderForm: React.FC<OrderFormProps> = ({
                       <option
                         key={s}
                         value={s}
-                        disabled={s === OrderStatus.COMPLETED && !allDriversCompleted && normalizedStatus !== OrderStatus.COMPLETED}
+                        disabled={
+                          ((s === OrderStatus.COMPLETED || s === OrderStatus.AWAITING_CLOSING_DOCS) && !allDriversCompleted) ||
+                          (s === OrderStatus.COMPLETED && !isPaymentConfirmed && normalizedStatus !== OrderStatus.COMPLETED)
+                        }
                       >
                         {getOrderStatusLabel(s)}
                       </option>
@@ -877,7 +908,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
                 {allDriversCompleted && ![OrderStatus.COMPLETED, OrderStatus.CANCELLED].includes(normalizedStatus) && (
                   <button
                     type="button"
-                    onClick={() => smartAction('change_status', OrderStatus.COMPLETED)}
+                    onClick={() => smartAction('change_status', OrderStatus.AWAITING_CLOSING_DOCS)}
                     className="bg-green-600 hover:bg-green-500 text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase shadow-lg"
                   >
                     ✅ Завершить вывоз

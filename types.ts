@@ -1628,16 +1628,42 @@ export const calculateOrderTotals = (
   const includeCharges = options?.includeCharges ?? false;
   let customerTotal = 0;
   let contractorTotal = 0;
+  const loaderAssignments = (order.driverDetails || []).filter(d => isLoaderType(d.assetType));
+  const loaderHasActual = loaderAssignments.some(d => d.shiftStartTime || d.shiftEndTime);
 
   (order.assetRequirements || []).forEach(req => {
     const units = getUnitsForRequirement(order, req, { mode });
     customerTotal += units * (req.customerPrice || 0);
-    contractorTotal += units * (req.contractorPrice || 0);
+    if (!(isLoaderType(req.type) && req.priceUnit === PriceUnit.PER_SHIFT && loaderHasActual)) {
+      contractorTotal += units * (req.contractorPrice || 0);
+    }
     if (includeCharges) {
       if (req.minimalCharge) customerTotal += req.minimalCharge;
       if (req.deliveryCharge) customerTotal += req.deliveryCharge;
     }
   });
+
+  if (loaderHasActual) {
+    loaderAssignments.forEach(assignment => {
+      const matchedRequirement = (order.assetRequirements || []).find(r =>
+        r.type === assignment.assetType ||
+        (isLoaderType(r.type) && isLoaderType(assignment.assetType)) ||
+        (isTruckType(r.type) && isTruckType(assignment.assetType))
+      );
+      const pricePerUnit = assignment.assignedPrice || matchedRequirement?.contractorPrice || 0;
+      if (!pricePerUnit) return;
+      const shiftHours = getShiftHours(assignment.shiftStartTime, assignment.shiftEndTime, 'confirmed');
+      if (assignment.shiftEndTime) {
+        const hourlyRate = pricePerUnit / 8;
+        const computedByHours = shiftHours > 7 ? hourlyRate * shiftHours : pricePerUnit;
+        contractorTotal += Math.max(pricePerUnit, computedByHours);
+        return;
+      }
+      if (assignment.shiftStartTime) {
+        contractorTotal += pricePerUnit;
+      }
+    });
+  }
 
   return { customerTotal, contractorTotal, margin: customerTotal - contractorTotal };
 };
