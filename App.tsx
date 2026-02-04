@@ -20,13 +20,14 @@ import {
   ManagerName,
   Order,
   OrderStatus,
-  SIMPLIFIED_STATUS_FLOW,
+  FULL_ORDER_STATUS_FLOW,
   TripEvidence,
   generateId,
   generateOrderNumber,
   getOrderStatusLabel,
   isOrderInDateRange,
   normalizeOrderStatus,
+  calculateOrderTotals,
   PaymentType,
   // Новые типы
   UserRole,
@@ -561,7 +562,7 @@ export default function App() {
     const term = orderSearch.trim().toLowerCase();
     const customerTerm = customerFilterText.trim().toLowerCase();
     return orders.filter(o => {
-      if (statusFilter !== 'all' && normalizeOrderStatus(o.status) !== statusFilter) return false;
+      if (statusFilter !== 'all' && o.status !== statusFilter) return false;
       if (customerFilterId && o.customerId !== customerFilterId) return false;
       if (!customerFilterId && customerTerm && !o.customer.toLowerCase().includes(customerTerm)) return false;
       if (!isOrderInDateRange(o, dateRange)) return false;
@@ -640,15 +641,30 @@ export default function App() {
 
   const onSubmitOrderForm = useCallback(
     (data: Partial<Order>, keepOpen?: boolean) => {
+      const merged = editingOrder?.id ? ({ ...editingOrder, ...data } as Order) : (data as Order);
+      let totalCustomerPrice: number | undefined;
+      let totalContractorPrice: number | undefined;
+      let grossProfit: number | undefined;
+      if (merged.currentEstimate) {
+        totalCustomerPrice = merged.currentEstimate.totalCustomerPrice;
+        totalContractorPrice = merged.currentEstimate.totalCost;
+        grossProfit = merged.currentEstimate.grossProfit;
+      } else {
+        const totals = calculateOrderTotals(merged, { mode: 'actual_or_planned', includeCharges: true });
+        totalCustomerPrice = totals.customerTotal;
+        totalContractorPrice = totals.contractorTotal;
+        grossProfit = totals.margin;
+      }
+      const dataWithTotals = { ...data, totalCustomerPrice, totalContractorPrice, grossProfit };
       if (editingOrder?.id) {
-        updateOrder(editingOrder.id, data);
+        updateOrder(editingOrder.id, dataWithTotals);
         if (keepOpen) {
           // Обновляем editingOrder, чтобы форма показывала актуальные данные
-          setEditingOrder(prev => prev ? { ...prev, ...data } as Order : undefined);
+          setEditingOrder(prev => prev ? { ...prev, ...dataWithTotals } as Order : undefined);
           return;
         }
       } else {
-        addOrder(data);
+        addOrder(dataWithTotals);
       }
       setEditingOrder(undefined);
       setView('dashboard');
@@ -787,7 +803,6 @@ export default function App() {
         );
         return {
           ...o,
-          status: OrderStatus.COMPLETED,
           assignments,
           driverDetails,
           updatedAt: now,
@@ -958,10 +973,7 @@ export default function App() {
         const statuses = driverDetails.map(d => d.status);
         const hasWorking = statuses.some(s => s === 'working' || s === 'on_site');
         const hasEnRoute = statuses.some(s => s === 'en_route');
-        const allCompleted = statuses.length > 0 && statuses.every(s => s === 'completed');
-        const nextStatus = allCompleted
-          ? OrderStatus.COMPLETED
-          : hasWorking
+        const nextStatus = hasWorking
           ? OrderStatus.IN_PROGRESS
           : hasEnRoute
           ? OrderStatus.EN_ROUTE
@@ -1076,7 +1088,7 @@ export default function App() {
               setDateTo={setDateTo}
               statusFilter={statusFilter}
               setStatusFilter={setStatusFilter}
-              statusOptions={SIMPLIFIED_STATUS_FLOW}
+              statusOptions={FULL_ORDER_STATUS_FLOW}
             />
 
             <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-2xl p-6">

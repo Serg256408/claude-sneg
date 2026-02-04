@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Order, OrderStatus, ManagerName, Contractor, AssetRequirement, AssetType, Customer, Bid, Quote, ActionLog, formatPrice, formatDateTime, generateId, PriceUnit, SIMPLIFIED_STATUS_FLOW, getOrderStatusLabel, normalizeOrderStatus } from './types';
+import { Order, OrderStatus, ManagerName, Contractor, AssetRequirement, AssetType, Customer, Bid, Quote, ActionLog, formatPrice, formatDateTime, generateId, PriceUnit, FULL_ORDER_STATUS_FLOW, getOrderStatusLabel, getNormalizedStatusLabel, normalizeOrderStatus, calculateOrderTotals, isTruckType, isLoaderType } from './types';
 
 interface OrderFormProps {
   initialData?: Order;
@@ -65,28 +65,15 @@ const OrderForm: React.FC<OrderFormProps> = ({
   const isApprovedByCustomer = [OrderStatus.SEARCHING_EQUIPMENT, OrderStatus.EQUIPMENT_APPROVED, OrderStatus.EN_ROUTE, OrderStatus.IN_PROGRESS, OrderStatus.COMPLETED].includes(normalizeOrderStatus(formData.status as OrderStatus));
   const pendingBids = useMemo(() => (formData.bids || []).filter(b => b.status === 'pending'), [formData.bids]);
   const isOrderCompleted = normalizeOrderStatus(formData.status as OrderStatus) === OrderStatus.COMPLETED;
+  const allDriversCompleted = (formData.driverDetails || []).length > 0 &&
+    (formData.driverDetails || []).every(d => d.status === 'completed');
   const unconfirmedEvidences = useMemo(() => (formData.evidences || []).filter(e => !e.confirmed), [formData.evidences]);
   const confirmedEvidences = useMemo(() => (formData.evidences || []).filter(e => e.confirmed), [formData.evidences]);
 
   // Расчёт итогов
   const totals = useMemo(() => {
-    let customerTotal = 0;
-    let contractorTotal = 0;
-    const tripsCount = formData.actualTrips || 0;
-
-    (formData.assetRequirements || []).forEach(req => {
-      if (req.type === AssetType.TRUCK) {
-        customerTotal += tripsCount * (req.customerPrice || 0);
-        contractorTotal += tripsCount * (req.contractorPrice || 0);
-      } else {
-        const units = (formData.driverDetails || []).filter(d => d.assetType === req.type).length || req.plannedUnits;
-        customerTotal += units * (req.customerPrice || 0);
-        contractorTotal += units * (req.contractorPrice || 0);
-      }
-    });
-
-    return { customerTotal, contractorTotal, margin: customerTotal - contractorTotal };
-  }, [formData.assetRequirements, formData.actualTrips, formData.driverDetails]);
+    return calculateOrderTotals(formData as Order, { mode: 'actual_or_planned', includeCharges: true });
+  }, [formData.assetRequirements, formData.driverDetails, formData.evidences, formData.plannedTrips, formData.status]);
 
   // Логирование действий
   const createActionLog = useCallback((action: string, actionType: ActionLog['actionType'], prevValue?: string, newValue?: string) => ({
@@ -145,6 +132,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
   };
 
   const addAsset = (type: AssetType) => {
+    const priceUnit = isLoaderType(type) ? PriceUnit.PER_SHIFT : PriceUnit.PER_TRIP;
     const newAsset: AssetRequirement = {
       id: generateId(),
       type,
@@ -153,7 +141,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
       plannedUnits: 1,
       customerPrice: 0,
       contractorPrice: 0,
-      priceUnit: PriceUnit.PER_TRIP
+      priceUnit
     };
     setFormData({ ...formData, assetRequirements: [...(formData.assetRequirements || []), newAsset] });
   };
@@ -298,6 +286,10 @@ const OrderForm: React.FC<OrderFormProps> = ({
       logAction('Отправлены персональные предложения подрядчикам', 'other');
       alert('📨 Уведомления отправлены подрядчикам!');
     } else if (action === 'change_status' && newStatus) {
+      if (newStatus === OrderStatus.COMPLETED && !allDriversCompleted) {
+        alert('Завершить вывоз можно только после того, как вся техника завершила работу.');
+        return;
+      }
       const prevStatus = updated.status;
       updated.status = newStatus;
       if (newStatus === OrderStatus.SEARCHING_EQUIPMENT) {
@@ -317,13 +309,17 @@ const OrderForm: React.FC<OrderFormProps> = ({
     let loaderPrice = 0;
     let minimalCharge = 0;
     let deliveryCharge = 0;
+    let chargesSet = false;
 
     (formData.assetRequirements || []).forEach(req => {
-      if (req.type === AssetType.TRUCK && req.priceUnit === PriceUnit.PER_TRIP) {
+      if (isTruckType(req.type) && req.priceUnit === PriceUnit.PER_TRIP) {
         truckPrice = req.customerPrice || 0;
-        minimalCharge = req.minimalCharge || 0;
-        deliveryCharge = req.deliveryCharge || 0;
-      } else if (req.type === AssetType.LOADER || req.type === AssetType.MINI_LOADER) {
+        if (!chargesSet) {
+          minimalCharge = req.minimalCharge || 0;
+          deliveryCharge = req.deliveryCharge || 0;
+          chargesSet = true;
+        }
+      } else if (isLoaderType(req.type)) {
         loaderPrice = req.customerPrice || 0;
       }
     });
@@ -341,6 +337,26 @@ const OrderForm: React.FC<OrderFormProps> = ({
 
   // Создание КП
   const createQuote = () => {
+    const requirements = formData.assetRequirements || [];
+    const firstTruckIndex = requirements.findIndex(req => isTruckType(req.type));
+    const quoteOrder: Order = {
+      ...(formData as Order),
+      assetRequirements: requirements.map((req, idx) => {
+        let customerPrice = req.customerPrice;
+        if (isTruckType(req.type)) {
+          customerPrice = quoteForm.truckPricePerTrip;
+        } else if (isLoaderType(req.type)) {
+          customerPrice = quoteForm.loaderPricePerShift;
+        }
+        return {
+          ...req,
+          customerPrice,
+          minimalCharge: idx === firstTruckIndex ? quoteForm.minimalCharge : 0,
+          deliveryCharge: idx === firstTruckIndex ? quoteForm.deliveryCharge : 0
+        };
+      })
+    };
+    const quoteTotals = calculateOrderTotals(quoteOrder, { mode: 'planned', includeCharges: true });
     const quote: Quote = {
       id: generateId(),
       orderId: formData.id || '',
@@ -351,7 +367,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
       loaderPricePerShift: quoteForm.loaderPricePerShift,
       minimalCharge: quoteForm.minimalCharge,
       deliveryCharge: quoteForm.deliveryCharge,
-      estimatedTotal: (quoteForm.truckPricePerTrip * (formData.plannedTrips || 0)) + quoteForm.loaderPricePerShift + quoteForm.minimalCharge + quoteForm.deliveryCharge,
+      estimatedTotal: quoteTotals.customerTotal,
       notes: quoteForm.notes,
       status: 'sent'
     };
@@ -383,12 +399,10 @@ const OrderForm: React.FC<OrderFormProps> = ({
   const currentStepIndex = statusSteps.indexOf(normalizedStatus);
 
   const statusActions = [
-    { from: [OrderStatus.NEW_REQUEST], to: OrderStatus.AWAITING_CUSTOMER, label: 'Запросить согласование' },
     { from: [OrderStatus.AWAITING_CUSTOMER], to: OrderStatus.SEARCHING_EQUIPMENT, label: 'Клиент согласовал' },
     { from: [OrderStatus.SEARCHING_EQUIPMENT], to: OrderStatus.EQUIPMENT_APPROVED, label: 'Техника назначена' },
     { from: [OrderStatus.EQUIPMENT_APPROVED], to: OrderStatus.EN_ROUTE, label: 'В пути' },
     { from: [OrderStatus.EN_ROUTE], to: OrderStatus.IN_PROGRESS, label: 'В работе' },
-    { from: [OrderStatus.IN_PROGRESS], to: OrderStatus.COMPLETED, label: 'Завершить заказ' }
   ];
 
   return (
@@ -449,7 +463,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
                 <span className={`text-[7px] font-black uppercase tracking-wider text-center leading-tight max-w-[80px] ${
                   isActive || isDone ? 'text-slate-300' : 'text-slate-600'
                 }`}>
-                  {getOrderStatusLabel(s).split(' ').slice(0, 2).join(' ')}
+                  {getNormalizedStatusLabel(s).split(' ').slice(0, 2).join(' ')}
                 </span>
               </div>
             );
@@ -609,8 +623,14 @@ const OrderForm: React.FC<OrderFormProps> = ({
                     value={formData.status}
                     onChange={e => smartAction('change_status', e.target.value as OrderStatus)}
                   >
-                    {SIMPLIFIED_STATUS_FLOW.map(s => (
-                      <option key={s} value={s}>{getOrderStatusLabel(s)}</option>
+                    {FULL_ORDER_STATUS_FLOW.map(s => (
+                      <option
+                        key={s}
+                        value={s}
+                        disabled={s === OrderStatus.COMPLETED && !allDriversCompleted && normalizedStatus !== OrderStatus.COMPLETED}
+                      >
+                        {getOrderStatusLabel(s)}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -759,7 +779,13 @@ const OrderForm: React.FC<OrderFormProps> = ({
                 </div>
 
                 <div className="space-y-3">
-                  {(formData.assetRequirements || []).map((req, idx) => (
+                  {(formData.assetRequirements || []).map((req, idx) => {
+                    const unitLabel = req.priceUnit === PriceUnit.PER_HOUR
+                      ? 'час'
+                      : req.priceUnit === PriceUnit.PER_SHIFT
+                      ? 'смена'
+                      : 'рейс';
+                    return (
                     <div key={idx} className={`bg-white/5 p-4 rounded-xl border ${req.contractorId ? 'border-orange-500/30' : 'border-white/10'}`}>
                       <div className="grid grid-cols-1 md:grid-cols-6 gap-4 items-center">
                         <div className="flex items-center gap-3 md:col-span-2">
@@ -781,7 +807,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
                           </div>
                         </div>
                         <div>
-                          <span className="text-[8px] font-black text-slate-500 uppercase block mb-1">Клиенту</span>
+                          <span className="text-[8px] font-black text-slate-500 uppercase block mb-1">Клиенту / {unitLabel}</span>
                           <input
                             type="number"
                             className="w-full bg-transparent border-b border-white/20 text-sm font-black p-1 text-center"
@@ -790,7 +816,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
                           />
                         </div>
                         <div>
-                          <span className="text-[8px] font-black text-slate-500 uppercase block mb-1">Подрядчику</span>
+                          <span className="text-[8px] font-black text-slate-500 uppercase block mb-1">Подрядчику / {unitLabel}</span>
                           <input
                             type="number"
                             className="w-full bg-transparent border-b border-white/20 text-sm font-black p-1 text-center text-green-400"
@@ -799,7 +825,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
                           />
                         </div>
                         <div>
-                          <span className="text-[8px] font-black text-slate-500 uppercase block mb-1">Кол-во</span>
+                          <span className="text-[8px] font-black text-slate-500 uppercase block mb-1">Кол-во / {unitLabel}</span>
                           <input
                             type="number"
                             className="w-full bg-transparent border-b border-white/20 text-sm font-black p-1 text-center"
@@ -812,7 +838,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
                         </button>
                       </div>
                     </div>
-                  ))}
+                  )})}
                 </div>
               </div>
 
@@ -848,6 +874,15 @@ const OrderForm: React.FC<OrderFormProps> = ({
                       {action.label}
                     </button>
                   ))}
+                {allDriversCompleted && ![OrderStatus.COMPLETED, OrderStatus.CANCELLED].includes(normalizedStatus) && (
+                  <button
+                    type="button"
+                    onClick={() => smartAction('change_status', OrderStatus.COMPLETED)}
+                    className="bg-green-600 hover:bg-green-500 text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase shadow-lg"
+                  >
+                    ✅ Завершить вывоз
+                  </button>
+                )}
                 {[OrderStatus.COMPLETED, OrderStatus.CANCELLED].includes(normalizedStatus) || (
                   <button
                     type="button"

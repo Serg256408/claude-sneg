@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { Order, OrderStatus, AssetType, Contractor, Bid, DriverAssignment, formatPrice, formatDateTime, generateId, PriceUnit, TripEvidence, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus } from './types';
+import { Order, OrderStatus, AssetType, Contractor, Bid, DriverAssignment, formatPrice, formatDateTime, generateId, PriceUnit, TripEvidence, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateAssignmentEarnings, isLoaderType } from './types';
 import DriverPortal from './DriverPortal';
 
 interface ContractorPortalProps {
@@ -31,13 +31,16 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'available' | 'direct' | 'active' | 'earnings' | 'driver'>('available');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const getDefaultArrivalTime = () => new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 16);
   const [bidForm, setBidForm] = useState({
     price: 0,
     assetType: AssetType.TRUCK,
     vehicleInfo: '',
-    estimatedArrival: '30',
+    estimatedArrival: getDefaultArrivalTime(),
     comment: ''
   });
+  const [preBidPrices, setPreBidPrices] = useState<Record<string, string>>({});
+  const [counterOfferPrices, setCounterOfferPrices] = useState<Record<string, string>>({});
   const [showBidModal, setShowBidModal] = useState(false);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -107,6 +110,126 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
     return myBids.filter(entry => isOrderInDateRange(entry.order, dateRange));
   }, [myBids, dateRange]);
 
+  const getUnitLabel = (unit: PriceUnit) => {
+    if (unit === PriceUnit.PER_SHIFT) return 'смена';
+    if (unit === PriceUnit.PER_HOUR) return 'час';
+    return 'рейс';
+  };
+
+  const getUnitPlural = (unit: PriceUnit) => {
+    if (unit === PriceUnit.PER_SHIFT) return 'смен';
+    if (unit === PriceUnit.PER_HOUR) return 'часов';
+    return 'рейсов';
+  };
+
+  const getEffectivePriceUnit = (assignment: DriverAssignment) => {
+    if (assignment.priceUnit === PriceUnit.PER_TRIP && isLoaderType(assignment.assetType)) {
+      return PriceUnit.PER_SHIFT;
+    }
+    return assignment.priceUnit;
+  };
+
+  const getDriverStatusInfo = (status: DriverAssignment['status']) => {
+    if (status === 'completed') return { label: 'Завершено', className: 'bg-green-600/20 text-green-400' };
+    if (status === 'working') return { label: 'В работе', className: 'bg-green-500/20 text-green-400' };
+    if (status === 'en_route') return { label: 'В пути', className: 'bg-blue-500/20 text-blue-400' };
+    if (status === 'on_site') return { label: 'На месте', className: 'bg-indigo-500/20 text-indigo-300' };
+    if (status === 'confirmed') return { label: 'Подтверждён', className: 'bg-sky-500/20 text-sky-300' };
+    if (status === 'cancelled') return { label: 'Отменён', className: 'bg-red-500/20 text-red-400' };
+    return { label: 'Назначен', className: 'bg-slate-500/20 text-slate-300' };
+  };
+
+  const visibleMyBids = useMemo(() => {
+    return filteredMyBids.filter(entry => ['pending', 'rejected'].includes(entry.bid.status));
+  }, [filteredMyBids]);
+
+  const latestBidByOrderAndType = useMemo(() => {
+    const map = new Map<string, { order: Order; bid: Bid }>();
+    filteredMyBids.forEach(entry => {
+      const key = `${entry.order.id}::${entry.bid.assetType}`;
+      const existing = map.get(key);
+      if (!existing) {
+        map.set(key, entry);
+        return;
+      }
+      const existingTime = new Date(existing.bid.createdAt).getTime();
+      const entryTime = new Date(entry.bid.createdAt).getTime();
+      if (entryTime >= existingTime) {
+        map.set(key, entry);
+      }
+    });
+    return map;
+  }, [filteredMyBids]);
+
+  const getBidStatusLabel = (status?: Bid['status']) => {
+    if (status === 'withdrawn') return 'Отклик отозван';
+    if (status === 'accepted') return 'Отклик принят';
+    return 'Отклик отправлен';
+  };
+
+  const earningsByOrder = useMemo(() => {
+    return orders
+      .filter(order => (order.driverDetails || []).some(d => d.contractorId === currentContractorId))
+      .map(order => {
+        const drivers = (order.driverDetails || []).filter(d => d.contractorId === currentContractorId);
+        const driverRows = drivers.map(driver => {
+          const earnings = calculateAssignmentEarnings(order, driver);
+          const effectiveUnit = getEffectivePriceUnit(driver);
+          const unitLabel = getUnitLabel(effectiveUnit);
+          const unitPlural = getUnitPlural(effectiveUnit);
+          return { driver, earnings, unitLabel, unitPlural };
+        });
+
+        const totals = driverRows.reduce(
+          (acc, row) => {
+            acc.confirmed += row.earnings.confirmedAmount;
+            acc.pending += row.earnings.pendingAmount;
+            return acc;
+          },
+          { confirmed: 0, pending: 0 }
+        );
+
+        const statusCounts = drivers.reduce<Record<string, number>>((acc, driver) => {
+          acc[driver.status] = (acc[driver.status] || 0) + 1;
+          return acc;
+        }, {});
+
+        const statusSummary = [
+          statusCounts.working ? `В работе: ${statusCounts.working}` : null,
+          statusCounts.en_route ? `В пути: ${statusCounts.en_route}` : null,
+          statusCounts.on_site ? `На месте: ${statusCounts.on_site}` : null,
+          statusCounts.confirmed ? `Подтверждено: ${statusCounts.confirmed}` : null,
+          statusCounts.assigned ? `Назначено: ${statusCounts.assigned}` : null,
+          statusCounts.completed ? `Завершено: ${statusCounts.completed}` : null
+        ].filter(Boolean).join(' • ') || 'Нет активных назначений';
+
+        const normalizedStatus = normalizeOrderStatus(order.status);
+        const statusClass =
+          normalizedStatus === OrderStatus.COMPLETED
+            ? 'bg-green-600/20 text-green-400'
+            : normalizedStatus === OrderStatus.IN_PROGRESS
+              ? 'bg-green-500/20 text-green-400'
+              : normalizedStatus === OrderStatus.EN_ROUTE
+                ? 'bg-blue-500/20 text-blue-400'
+                : normalizedStatus === OrderStatus.SEARCHING_EQUIPMENT
+                  ? 'bg-yellow-500/20 text-yellow-300'
+                  : 'bg-slate-500/20 text-slate-300';
+
+        return {
+          order,
+          driverRows,
+          totals,
+          statusSummary,
+          statusClass
+        };
+      })
+      .sort((a, b) => {
+        const aTime = new Date(a.order.updatedAt || a.order.createdAt || a.order.scheduledTime).getTime();
+        const bTime = new Date(b.order.updatedAt || b.order.createdAt || b.order.scheduledTime).getTime();
+        return bTime - aTime;
+      });
+  }, [orders, currentContractorId]);
+
   // Количество единиц техники в работе (всего)
   const activeEquipmentCount = useMemo(() => {
     return filteredActiveOrders.reduce((count, order) => {
@@ -127,16 +250,12 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
       if (myDrivers.length === 0) return;
 
       myDrivers.forEach(driver => {
-        const driverTrips = (o.evidences || []).filter(e => e.driverName === driver.driverName);
-        const confirmedTrips = driverTrips.filter(e => e.confirmed).length;
-        const pendingTrips = driverTrips.filter(e => !e.confirmed).length;
-        
-        const pricePerTrip = driver.assignedPrice || 
-          o.assetRequirements.find(r => r.type === driver.assetType)?.contractorPrice || 0;
-        
-        totalEarned += confirmedTrips * pricePerTrip;
-        totalPending += pendingTrips * pricePerTrip;
-        totalTrips += driverTrips.length;
+        const earnings = calculateAssignmentEarnings(o, driver);
+        totalEarned += earnings.confirmedAmount;
+        totalPending += earnings.pendingAmount;
+        if (driver.priceUnit === PriceUnit.PER_TRIP) {
+          totalTrips += earnings.confirmedUnits + earnings.pendingUnits;
+        }
       });
 
       if (normalizeOrderStatus(o.status) === OrderStatus.COMPLETED) {
@@ -150,6 +269,10 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
   // Отправка отклика
   const handleSubmitBid = useCallback(() => {
     if (!selectedOrder || !currentContractor) return;
+    if (!bidForm.estimatedArrival) {
+      alert('Укажите время подачи техники.');
+      return;
+    }
 
     const newBid: Bid = {
       id: generateId(),
@@ -159,8 +282,8 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
       assetType: bidForm.assetType,
       vehicleInfo: bidForm.vehicleInfo,
       proposedPrice: bidForm.price,
-      priceUnit: PriceUnit.PER_TRIP,
-      estimatedArrival: `${bidForm.estimatedArrival} мин`,
+      priceUnit: isLoaderType(bidForm.assetType) ? PriceUnit.PER_SHIFT : PriceUnit.PER_TRIP,
+      estimatedArrival: bidForm.estimatedArrival,
       comment: bidForm.comment,
       createdAt: new Date().toISOString(),
       status: 'pending'
@@ -169,7 +292,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
     onSubmitBid(selectedOrder.id, newBid);
     setShowBidModal(false);
     setSelectedOrder(null);
-    setBidForm({ price: 0, assetType: AssetType.TRUCK, vehicleInfo: '', estimatedArrival: '30', comment: '' });
+    setBidForm({ price: 0, assetType: AssetType.TRUCK, vehicleInfo: '', estimatedArrival: getDefaultArrivalTime(), comment: '' });
   }, [selectedOrder, currentContractor, currentContractorId, bidForm, onSubmitBid]);
 
   // Отзыв отклика
@@ -179,16 +302,53 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
     }
   }, [onWithdrawBid]);
 
+  const submitLowerPriceOffer = (order: Order, bid: Bid, priceInput: string, key: string) => {
+    if (!currentContractor) return;
+    const proposedPrice = Number(priceInput);
+    if (!Number.isFinite(proposedPrice) || proposedPrice <= 0) {
+      alert('Укажите корректную цену.');
+      return;
+    }
+    if (proposedPrice >= bid.proposedPrice) {
+      alert('Цена должна быть ниже предыдущего предложения.');
+      return;
+    }
+
+    const newBid: Bid = {
+      id: generateId(),
+      orderId: order.id,
+      contractorId: currentContractorId,
+      driverName: currentContractor.name || bid.driverName,
+      assetType: bid.assetType,
+      vehicleInfo: bid.vehicleInfo,
+      proposedPrice,
+      priceUnit: bid.priceUnit,
+      estimatedArrival: bid.estimatedArrival || getDefaultArrivalTime(),
+      comment: bid.comment ? `${bid.comment} | Предложение меньшей цены` : 'Предложение меньшей цены',
+      createdAt: new Date().toISOString(),
+      status: 'pending'
+    };
+
+    onSubmitBid(order.id, newBid);
+    setCounterOfferPrices(prev => ({ ...prev, [key]: '' }));
+  };
+
   // Открытие модалки отклика
-  const openBidModal = (order: Order, assetType: AssetType) => {
+  const openBidModal = (order: Order, assetType: AssetType, priceOverride?: number, priceKey?: string) => {
     const requirement = order.assetRequirements.find(r => r.type === assetType);
     setSelectedOrder(order);
+    const basePrice = requirement?.contractorPrice || 0;
+    const nextPrice = typeof priceOverride === 'number' ? priceOverride : basePrice;
     setBidForm(prev => ({
       ...prev,
       assetType,
-      price: requirement?.contractorPrice || 0
+      price: nextPrice,
+      estimatedArrival: getDefaultArrivalTime()
     }));
     setShowBidModal(true);
+    if (priceKey) {
+      setPreBidPrices(prev => ({ ...prev, [priceKey]: '' }));
+    }
   };
 
   if (!currentContractor) {
@@ -309,14 +469,14 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
         {activeTab === 'available' && (
           <div className="space-y-4 animate-in fade-in">
             {/* Мои отклики */}
-            {filteredMyBids.filter(b => b.bid.status === 'pending').length > 0 && (
+            {visibleMyBids.length > 0 && (
               <div className="bg-blue-600/10 border border-blue-500/30 rounded-2xl p-4 mb-4">
                 <h4 className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-3 flex items-center gap-2">
                   <span className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></span>
-                  Ваши отклики ({filteredMyBids.filter(b => b.bid.status === 'pending').length})
+                  Ваши отклики ({visibleMyBids.length})
                 </h4>
                 <div className="space-y-2">
-                  {filteredMyBids.filter(b => b.bid.status === 'pending').map(({ order, bid }) => (
+                  {visibleMyBids.map(({ order, bid }) => (
                     <div key={bid.id} className="flex items-center justify-between bg-white/5 p-3 rounded-xl">
                       <div>
                         <div className="text-sm font-black">{order.address}</div>
@@ -372,22 +532,14 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                         {birzhaRequirements.map((req, i) => {
                           const assignedCount = (order.driverDetails || []).filter(d => d.assetType === req.type).length;
                           const remaining = Math.max(0, req.plannedUnits - assignedCount);
-                          const myBidForType = filteredMyBids.find(
-                            b => b.order.id === order.id && b.bid.assetType === req.type
-                          );
+                          const bidKey = `${order.id}::${req.type}`;
+                          const myBidForType = latestBidByOrderAndType.get(bidKey);
                           const hasMyBidForType = Boolean(myBidForType);
                           
                           const isTruck = req.type === AssetType.TRUCK;
                           const typeName = req.type === AssetType.LOADER ? 'Погрузчик' : req.type === AssetType.MINI_LOADER ? 'Мини-погрузчик' : 'Самосвал';
-                          const bidStatusLabel = myBidForType?.bid.status === 'withdrawn'
-                            ? 'Отклик отозван'
-                            : myBidForType?.bid.status === 'rejected'
-                              ? 'Отклик отклонён'
-                              : myBidForType?.bid.status === 'accepted'
-                                ? 'Отклик принят'
-                                : myBidForType?.bid.status === 'pending'
-                                  ? 'Отклик отправлен'
-                                  : 'Отклик отправлен';
+                          const bidStatusLabel = getBidStatusLabel(myBidForType?.bid.status);
+                          const basePrice = req.contractorPrice || 0;
                           
                           return (
                             <div key={i} className="flex items-center justify-between bg-white/5 p-3 rounded-xl">
@@ -407,15 +559,70 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                                   <div className="text-[8px] text-slate-500">{isTruck ? 'за рейс' : 'за смену'}</div>
                                 </div>
                                 {!hasMyBidForType ? (
-                                  <button 
-                                    onClick={() => openBidModal(order, req.type)}
-                                    className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase"
-                                  >
-                                    Откликнуться
-                                  </button>
+                                  <div className="flex flex-col items-end gap-2">
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      step={100}
+                                      placeholder="Цена меньше"
+                                      value={preBidPrices[bidKey] || ''}
+                                      onChange={e =>
+                                        setPreBidPrices(prev => ({ ...prev, [bidKey]: e.target.value }))
+                                      }
+                                      className="w-28 bg-[#0a0f1d] border border-white/10 rounded-xl px-3 py-2 text-[10px] font-bold outline-none focus:border-blue-500"
+                                    />
+                                    <button 
+                                      onClick={() => {
+                                        const rawPrice = (preBidPrices[bidKey] || '').trim();
+                                        if (rawPrice) {
+                                          const proposed = Number(rawPrice);
+                                          if (!Number.isFinite(proposed) || proposed <= 0) {
+                                            alert('Укажите корректную цену.');
+                                            return;
+                                          }
+                                          if (basePrice > 0 && proposed >= basePrice) {
+                                            alert('Цена должна быть ниже предложенной.');
+                                            return;
+                                          }
+                                          openBidModal(order, req.type, proposed, bidKey);
+                                          return;
+                                        }
+                                        openBidModal(order, req.type, undefined, bidKey);
+                                      }}
+                                      className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase"
+                                    >
+                                      Откликнуться
+                                    </button>
+                                  </div>
                                 ) : (
-                                  <div className="px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest bg-blue-600/20 text-blue-300 border border-blue-500/30">
-                                    ✓ {bidStatusLabel}
+                                  <div className="flex flex-col items-end gap-2">
+                                    <div className="px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest bg-blue-600/20 text-blue-300 border border-blue-500/30">
+                                      ✓ {bidStatusLabel}
+                                    </div>
+                                    {myBidForType?.bid.status === 'rejected' && (
+                                      <div className="flex items-center gap-2">
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          step={100}
+                                          placeholder="Цена меньше"
+                                          value={counterOfferPrices[bidKey] || ''}
+                                          onChange={e =>
+                                            setCounterOfferPrices(prev => ({ ...prev, [bidKey]: e.target.value }))
+                                          }
+                                          className="w-28 bg-[#0a0f1d] border border-white/10 rounded-xl px-3 py-2 text-[10px] font-bold outline-none focus:border-blue-500"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            submitLowerPriceOffer(order, myBidForType.bid, counterOfferPrices[bidKey] || '', bidKey)
+                                          }
+                                          className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded-xl text-[9px] font-black uppercase"
+                                        >
+                                          Предложить меньше
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -462,19 +669,11 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                           const assigned = (order.driverDetails || []).filter(d => d.assetType === req.type).length;
                           const remaining = (req.plannedUnits || 0) - assigned;
                           if (remaining <= 0) return null;
-                          const myBidForType = filteredMyBids.find(
-                            b => b.order.id === order.id && b.bid.assetType === req.type
-                          );
+                          const bidKey = `${order.id}::${req.type}`;
+                          const myBidForType = latestBidByOrderAndType.get(bidKey);
                           const hasMyBidForType = Boolean(myBidForType);
-                          const bidStatusLabel = myBidForType?.bid.status === 'withdrawn'
-                            ? 'Отклик отозван'
-                            : myBidForType?.bid.status === 'rejected'
-                              ? 'Отклик отклонён'
-                              : myBidForType?.bid.status === 'accepted'
-                                ? 'Отклик принят'
-                                : myBidForType?.bid.status === 'pending'
-                                  ? 'Отклик отправлен'
-                                  : 'Отклик отправлен';
+                          const bidStatusLabel = getBidStatusLabel(myBidForType?.bid.status);
+                          const basePrice = req.contractorPrice || 0;
                           return (
                             <div key={i} className="flex items-center justify-between bg-white/5 p-3 rounded-xl">
                               <div className="flex items-center gap-3">
@@ -489,15 +688,70 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                               <div className="flex items-center gap-3">
                                 <div className="text-lg font-black text-green-400">{formatPrice(req.contractorPrice)}</div>
                                 {!hasMyBidForType ? (
-                                  <button
-                                    onClick={() => openBidModal(order, req.type)}
-                                    className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase"
-                                  >
-                                    Откликнуться
-                                  </button>
+                                  <div className="flex flex-col items-end gap-2">
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      step={100}
+                                      placeholder="Цена меньше"
+                                      value={preBidPrices[bidKey] || ''}
+                                      onChange={e =>
+                                        setPreBidPrices(prev => ({ ...prev, [bidKey]: e.target.value }))
+                                      }
+                                      className="w-28 bg-[#0a0f1d] border border-white/10 rounded-xl px-3 py-2 text-[10px] font-bold outline-none focus:border-blue-500"
+                                    />
+                                    <button
+                                      onClick={() => {
+                                        const rawPrice = (preBidPrices[bidKey] || '').trim();
+                                        if (rawPrice) {
+                                          const proposed = Number(rawPrice);
+                                          if (!Number.isFinite(proposed) || proposed <= 0) {
+                                            alert('Укажите корректную цену.');
+                                            return;
+                                          }
+                                          if (basePrice > 0 && proposed >= basePrice) {
+                                            alert('Цена должна быть ниже предложенной.');
+                                            return;
+                                          }
+                                          openBidModal(order, req.type, proposed, bidKey);
+                                          return;
+                                        }
+                                        openBidModal(order, req.type, undefined, bidKey);
+                                      }}
+                                      className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase"
+                                    >
+                                      Откликнуться
+                                    </button>
+                                  </div>
                                 ) : (
-                                  <div className="px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest bg-blue-600/20 text-blue-300 border border-blue-500/30">
-                                    ✓ {bidStatusLabel}
+                                  <div className="flex flex-col items-end gap-2">
+                                    <div className="px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest bg-blue-600/20 text-blue-300 border border-blue-500/30">
+                                      ✓ {bidStatusLabel}
+                                    </div>
+                                    {myBidForType?.bid.status === 'rejected' && (
+                                      <div className="flex items-center gap-2">
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          step={100}
+                                          placeholder="Цена меньше"
+                                          value={counterOfferPrices[bidKey] || ''}
+                                          onChange={e =>
+                                            setCounterOfferPrices(prev => ({ ...prev, [bidKey]: e.target.value }))
+                                          }
+                                          className="w-28 bg-[#0a0f1d] border border-white/10 rounded-xl px-3 py-2 text-[10px] font-bold outline-none focus:border-blue-500"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            submitLowerPriceOffer(order, myBidForType.bid, counterOfferPrices[bidKey] || '', bidKey)
+                                          }
+                                          className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded-xl text-[9px] font-black uppercase"
+                                        >
+                                          Предложить меньше
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -691,6 +945,78 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
               </div>
             </div>
 
+            {/* Детализация по заказам */}
+            <div className="space-y-4">
+              <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Детализация по заказам</h4>
+              {earningsByOrder.length === 0 ? (
+                <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5 text-center text-slate-500 text-[10px] uppercase">
+                  Нет данных для отображения
+                </div>
+              ) : (
+                earningsByOrder.map(entry => (
+                  <div key={entry.order.id} className="bg-[#12192c] p-5 rounded-2xl border border-white/5">
+                    <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
+                      <div>
+                        <div className="text-[9px] font-black text-blue-400 uppercase tracking-widest mb-1">{entry.order.customer}</div>
+                        <div className="text-lg font-black">{entry.order.address}</div>
+                        <div className="text-[9px] text-slate-500">Подача: {formatDateTime(entry.order.scheduledTime)}</div>
+                      </div>
+                      <div className="flex flex-col items-end gap-2">
+                        <div className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase ${entry.statusClass}`}>
+                          {getOrderStatusLabel(entry.order.status)}
+                        </div>
+                        <div className="text-[9px] text-slate-400">{entry.statusSummary}</div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3 mb-4">
+                      <div className="bg-white/5 p-3 rounded-xl">
+                        <div className="text-[8px] uppercase text-slate-500">Подтверждено</div>
+                        <div className="text-lg font-black text-green-400">{formatPrice(entry.totals.confirmed)}</div>
+                      </div>
+                      <div className="bg-white/5 p-3 rounded-xl">
+                        <div className="text-[8px] uppercase text-slate-500">На проверке</div>
+                        <div className="text-lg font-black text-yellow-300">{formatPrice(entry.totals.pending)}</div>
+                      </div>
+                      <div className="bg-white/5 p-3 rounded-xl">
+                        <div className="text-[8px] uppercase text-slate-500">Всего</div>
+                        <div className="text-lg font-black">{formatPrice(entry.totals.confirmed + entry.totals.pending)}</div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      {entry.driverRows.map(row => {
+                        const statusInfo = getDriverStatusInfo(row.driver.status);
+                        const totalUnits = row.earnings.confirmedUnits + row.earnings.pendingUnits;
+                        return (
+                          <div key={row.driver.id} className="flex flex-wrap items-center justify-between gap-3 bg-white/5 p-3 rounded-xl">
+                            <div>
+                              <div className="text-sm font-black">{row.driver.driverName}</div>
+                              <div className="text-[9px] text-slate-500">
+                                {row.driver.assetType} • {formatPrice(row.earnings.pricePerUnit)} / {row.unitLabel}
+                              </div>
+                            </div>
+                            <div className="text-[9px] text-slate-400">
+                              Подтверждено: {row.earnings.confirmedUnits} {row.unitPlural} • На проверке: {row.earnings.pendingUnits} {row.unitPlural} • Всего: {totalUnits} {row.unitPlural}
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <div className="text-right">
+                                <div className="text-sm font-black text-green-400">{formatPrice(row.earnings.confirmedAmount)}</div>
+                                <div className="text-[9px] text-yellow-300">{formatPrice(row.earnings.pendingAmount)}</div>
+                              </div>
+                              <div className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase ${statusInfo.className}`}>
+                                {statusInfo.label}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
             {/* Рейтинг */}
             <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5">
               <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">Рейтинг компании</h4>
@@ -760,21 +1086,15 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
               </div>
 
               <div>
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Время подачи (минут)</label>
-                <div className="grid grid-cols-4 gap-2">
-                  {['15', '30', '45', '60'].map(t => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setBidForm({ ...bidForm, estimatedArrival: t })}
-                      className={`py-2 rounded-xl text-sm font-black ${
-                        bidForm.estimatedArrival === t ? 'bg-blue-600 text-white' : 'bg-white/5 text-slate-400'
-                      }`}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Время подачи</label>
+                <input
+                  type="datetime-local"
+                  className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-3 text-sm outline-none focus:border-blue-500 text-white"
+                  value={bidForm.estimatedArrival}
+                  min={new Date().toISOString().slice(0, 16)}
+                  onChange={e => setBidForm({ ...bidForm, estimatedArrival: e.target.value })}
+                />
+                <div className="text-[9px] text-slate-500 mt-2">Можно выбрать дату и время, включая завтра.</div>
               </div>
 
               <div>

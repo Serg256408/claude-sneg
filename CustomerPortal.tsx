@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { Order, OrderStatus, AssetType, AssetRequirement, OrderRestrictions, CustomerContact, Customer, PaymentType, formatPrice, formatDateTime, generateId, generateOrderNumber, PriceUnit, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus } from './types';
+import { Order, OrderStatus, AssetType, AssetRequirement, OrderRestrictions, CustomerContact, Customer, PaymentType, formatPrice, formatDateTime, generateId, generateOrderNumber, PriceUnit, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateOrderTotals, getUnitsForRequirement, getTripCounts, isTruckType, isLoaderType } from './types';
 
 interface CustomerPortalProps {
   orders: Order[];
@@ -117,54 +117,54 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
     return (order.evidences || []).length;
   }, [getConfirmedEvidences]);
 
-  const calculateOrderTotals = useCallback((order: Order) => {
+  const calculateOrderTotalsLocal = useCallback((order: Order) => {
+    const totals = calculateOrderTotals(order, { mode: 'actual_or_planned', includeCharges: true });
     let totalTruckCost = 0;
     let totalLoaderCost = 0;
-    const isFinished = normalizeOrderStatus(order.status) === OrderStatus.COMPLETED;
-    // Во время работы — все рейсы, после завершения — только подтверждённые
-    const customerTrips = isFinished ? getConfirmedEvidences(order).length : (order.evidences || []).length;
-
-    order.assetRequirements.forEach(req => {
-      if (req.type === AssetType.TRUCK) {
-        totalTruckCost = customerTrips * (req.customerPrice || 0);
-      } else {
-        const approvedUnits = (order.driverDetails || []).filter(d => d.assetType === req.type).length;
-        totalLoaderCost += approvedUnits * (req.customerPrice || 0);
+    (order.assetRequirements || []).forEach(req => {
+      const units = getUnitsForRequirement(order, req, { mode: 'actual_or_planned' });
+      if (isTruckType(req.type)) {
+        totalTruckCost += units * (req.customerPrice || 0);
+      } else if (isLoaderType(req.type)) {
+        totalLoaderCost += units * (req.customerPrice || 0);
       }
     });
-
+    const tripCounts = getTripCounts(order);
+    const totalTrips = normalizeOrderStatus(order.status) === OrderStatus.COMPLETED
+      ? tripCounts.confirmed
+      : (tripCounts.actual > 0 ? tripCounts.actual : tripCounts.planned);
     return {
-      totalTrips: customerTrips,
+      totalTrips,
       totalTruckCost,
       totalLoaderCost,
-      grandTotal: totalTruckCost + totalLoaderCost
+      grandTotal: totals.customerTotal
     };
-  }, [getConfirmedEvidences]);
+  }, []);
 
   const buildQuotePreviewData = useCallback((order: Order) => {
     const orderCustomer = customers.find(c => c.id === order.customerId) || customers.find(c => c.phone === order.contactInfo?.phone);
     const paymentType = orderCustomer?.paymentType;
     const vatRate = paymentType === PaymentType.VAT_20 ? 0.22 : 0;
     const quote = order.currentQuote;
-    const plannedTrips = order.plannedTrips || 0;
 
     const items: { label: string; units: number; unitLabel: string; unitPrice: number; total: number }[] = [];
     let subtotal = 0;
 
     order.assetRequirements.forEach(req => {
-      if (req.type === AssetType.TRUCK) {
-        const unitPrice = quote?.truckPricePerTrip ?? req.customerPrice ?? 0;
-        const units = plannedTrips;
-        const total = unitPrice * units;
-        subtotal += total;
-        items.push({ label: req.type, units, unitLabel: 'рейс', unitPrice, total });
-      } else {
-        const unitPrice = quote?.loaderPricePerShift ?? req.customerPrice ?? 0;
-        const units = req.plannedUnits || 0;
-        const total = unitPrice * units;
-        subtotal += total;
-        items.push({ label: req.type, units, unitLabel: 'смена', unitPrice, total });
-      }
+      const unitPrice = isTruckType(req.type)
+        ? (quote?.truckPricePerTrip ?? req.customerPrice ?? 0)
+        : isLoaderType(req.type)
+        ? (quote?.loaderPricePerShift ?? req.customerPrice ?? 0)
+        : (req.customerPrice ?? 0);
+      const units = getUnitsForRequirement(order, req, { mode: 'planned' });
+      const unitLabel = req.priceUnit === PriceUnit.PER_HOUR
+        ? 'час'
+        : req.priceUnit === PriceUnit.PER_SHIFT
+        ? 'смена'
+        : 'рейс';
+      const total = unitPrice * units;
+      subtotal += total;
+      items.push({ label: req.type, units, unitLabel, unitPrice, total });
     });
 
     if (quote?.minimalCharge) {
@@ -282,15 +282,12 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
     // Симуляция генерации документа
     await new Promise(resolve => setTimeout(resolve, 2000));
     
-    const totals = calculateOrderTotals(order);
-    const confirmedEvidences = getConfirmedEvidences(order);
+    const totals = calculateOrderTotalsLocal(order);
     const orderCustomer = customers.find(c => c.id === order.customerId) || customers.find(c => c.phone === order.contactInfo?.phone);
     const paymentType = orderCustomer?.paymentType;
     const vatRate = paymentType === PaymentType.VAT_20 ? 0.22 : 0;
     const getUnitsForReq = (req: AssetRequirement) => {
-      if (req.type === AssetType.TRUCK) return totals.totalTrips;
-      const approvedUnits = (order.driverDetails || []).filter(d => d.assetType === req.type).length;
-      return approvedUnits || req.plannedUnits || 0;
+      return getUnitsForRequirement(order, req, { mode: 'actual_or_planned' });
     };
     
     // Создаём текстовый отчёт (в реальном приложении - PDF)
@@ -308,16 +305,14 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
     const quoteLines = () => {
       const lines: string[] = [];
       const quote = order.currentQuote;
-      const plannedTrips = order.plannedTrips || 0;
       order.assetRequirements.forEach(req => {
-        if (req.type === AssetType.TRUCK) {
-          const price = quote?.truckPricePerTrip ?? req.customerPrice ?? 0;
-          lines.push(`${req.type}: ${formatPrice(price)} × ${plannedTrips} = ${formatPrice(price * plannedTrips)}`);
-        } else {
-          const units = req.plannedUnits || 0;
-          const price = quote?.loaderPricePerShift ?? req.customerPrice ?? 0;
-          lines.push(`${req.type}: ${formatPrice(price)} × ${units} = ${formatPrice(price * units)}`);
-        }
+        const units = getUnitsForRequirement(order, req, { mode: 'planned' });
+        const price = isTruckType(req.type)
+          ? (quote?.truckPricePerTrip ?? req.customerPrice ?? 0)
+          : isLoaderType(req.type)
+          ? (quote?.loaderPricePerShift ?? req.customerPrice ?? 0)
+          : (req.customerPrice ?? 0);
+        lines.push(`${req.type}: ${formatPrice(price)} × ${units} = ${formatPrice(price * units)}`);
       });
       if (quote?.minimalCharge) {
         lines.push(`Минималка: ${formatPrice(quote.minimalCharge)}`);
@@ -330,17 +325,15 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
 
     const quoteSubtotal = () => {
       const quote = order.currentQuote;
-      const plannedTrips = order.plannedTrips || 0;
       let sum = 0;
       order.assetRequirements.forEach(req => {
-        if (req.type === AssetType.TRUCK) {
-          const price = quote?.truckPricePerTrip ?? req.customerPrice ?? 0;
-          sum += price * plannedTrips;
-        } else {
-          const units = req.plannedUnits || 0;
-          const price = quote?.loaderPricePerShift ?? req.customerPrice ?? 0;
-          sum += price * units;
-        }
+        const units = getUnitsForRequirement(order, req, { mode: 'planned' });
+        const price = isTruckType(req.type)
+          ? (quote?.truckPricePerTrip ?? req.customerPrice ?? 0)
+          : isLoaderType(req.type)
+          ? (quote?.loaderPricePerShift ?? req.customerPrice ?? 0)
+          : (req.customerPrice ?? 0);
+        sum += price * units;
       });
       sum += quote?.minimalCharge || 0;
       sum += quote?.deliveryCharge || 0;
@@ -421,7 +414,7 @@ ${confirmedEvidences.map((ev, i) =>
     setIsProcessingDoc(null);
     setShareStatus(`✅ Документ "${type}" успешно сформирован и загружен.`);
     setTimeout(() => setShareStatus(null), 3000);
-  }, [calculateOrderTotals]);
+  }, [calculateOrderTotalsLocal]);
 
   // Скачивание архива фото
   const downloadPhotos = useCallback(async (order: Order) => {
@@ -438,7 +431,7 @@ ${confirmedEvidences.map((ev, i) =>
 
   // Отправка в мессенджеры
   const shareToMessenger = useCallback((order: Order, channel: 'telegram' | 'whatsapp' | 'email') => {
-    const totals = calculateOrderTotals(order);
+    const totals = calculateOrderTotalsLocal(order);
     const message = encodeURIComponent(
       `📊 Отчёт SnowForce\n\n` +
       `Объект: ${order.address}\n` +
@@ -454,7 +447,7 @@ ${confirmedEvidences.map((ev, i) =>
     } else {
       window.open(`mailto:?subject=Отчёт SnowForce ${order.orderNumber}&body=${message}`, '_blank');
     }
-  }, [calculateOrderTotals]);
+  }, [calculateOrderTotalsLocal]);
 
   // Подтверждение условий
   const handleConfirmOrder = useCallback((orderId: string, urgent: boolean = false) => {
@@ -554,7 +547,7 @@ ${confirmedEvidences.map((ev, i) =>
             plannedUnits: 1,
             customerPrice: 0,
             contractorPrice: 0,
-            priceUnit: PriceUnit.PER_TRIP
+            priceUnit: isLoaderType(type) ? PriceUnit.PER_SHIFT : PriceUnit.PER_TRIP
           }] 
         };
       }
@@ -563,13 +556,9 @@ ${confirmedEvidences.map((ev, i) =>
 
   const getStatusBadge = (order: Order) => {
     const normalized = normalizeOrderStatus(order.status);
-    const hasAssignedTech = (order.driverDetails || []).length > 0 || (order.assignments || []).length > 0;
-    const displayStatus = normalized === OrderStatus.SEARCHING_EQUIPMENT && hasAssignedTech
-      ? OrderStatus.EQUIPMENT_APPROVED
-      : normalized;
-    const displayLabel = displayStatus === OrderStatus.SEARCHING_EQUIPMENT
+    const displayLabel = normalized === OrderStatus.SEARCHING_EQUIPMENT
       ? 'Назначение техники'
-      : getOrderStatusLabel(displayStatus);
+      : getOrderStatusLabel(order.status);
     const styles: Record<OrderStatus, string> = {
       [OrderStatus.NEW_REQUEST]: 'bg-slate-600/20 text-slate-400 border-slate-500/20',
       [OrderStatus.AWAITING_CUSTOMER]: 'bg-blue-600/20 text-blue-400 border-blue-500/20 animate-pulse',
@@ -587,7 +576,7 @@ ${confirmedEvidences.map((ev, i) =>
     };
     
     return (
-      <span className={`px-4 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-widest ${styles[displayStatus] || 'bg-slate-800 text-slate-500'}`}>
+      <span className={`px-4 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-widest ${styles[normalized] || 'bg-slate-800 text-slate-500'}`}>
         {displayLabel}
       </span>
     );
@@ -717,7 +706,7 @@ ${confirmedEvidences.map((ev, i) =>
               </div>
             ) : (
               filteredActiveOrders.map(order => {
-                const totals = calculateOrderTotals(order);
+                const totals = calculateOrderTotalsLocal(order);
                 const steps = getProgressSteps(order);
                 const needsConfirmation = normalizeOrderStatus(order.status) === OrderStatus.AWAITING_CUSTOMER;
                 const currentQuote = order.currentQuote;
@@ -861,54 +850,60 @@ ${confirmedEvidences.map((ev, i) =>
                     {getCustomerEvidences(order).length > 0 && (
                       <div className="px-6 pb-6">
                         <div className="text-[10px] font-black text-slate-500 uppercase mb-3">Фото рейсов</div>
-                        <div className="space-y-4">
-                          {getCustomerEvidences(order).slice().reverse().map(ev => {
-                            const allPhotos = ev.photos && ev.photos.length > 0 ? ev.photos : (ev.photo ? [{ url: ev.photo, type: 'other' as const, timestamp: ev.timestamp }] : []);
-                            const photoTypeLabels: Record<string, string> = {
-                              loading: '📦 Погрузка',
-                              full_truck: '🚛 Полный кузов',
-                              unloading: '📤 Выгрузка',
-                              ticket: '🎫 Талон',
-                              other: '📸 Фото'
-                            };
-                            return (
-                              <div key={ev.id} className="bg-white/5 rounded-2xl overflow-hidden border border-white/5">
-                                <div className="p-3 bg-white/5 border-b border-white/5">
-                                  <div className="flex justify-between items-center">
-                                    <span className="text-[10px] font-black text-white uppercase">Рейс #{ev.tripNumber}</span>
-                                    <span className="text-[9px] text-slate-400">{formatDateTime(ev.timestamp)}</span>
+                        {(() => {
+                          const photoTypeLabels: Record<string, string> = {
+                            loading: '📦 Погрузка',
+                            full_truck: '🚛 Полный кузов',
+                            unloading: '📤 Выгрузка',
+                            ticket: '🎫 Талон',
+                            other: '📸 Фото'
+                          };
+                          const photos = getCustomerEvidences(order)
+                            .slice()
+                            .reverse()
+                            .flatMap(ev => {
+                              const allPhotos = ev.photos && ev.photos.length > 0
+                                ? ev.photos
+                                : (ev.photo ? [{ url: ev.photo, type: 'other' as const, timestamp: ev.timestamp }] : []);
+                              return allPhotos.map((photo, idx) => ({
+                                key: `${ev.id}-${idx}`,
+                                url: photo.url,
+                                type: photo.type,
+                                timestamp: photo.timestamp || ev.timestamp,
+                                address: ev.address || order.address,
+                                tripNumber: ev.tripNumber,
+                                driverName: ev.driverName
+                              }));
+                            });
+                          if (photos.length === 0) {
+                            return <div className="p-4 text-center text-[9px] text-slate-500">Нет фото</div>;
+                          }
+                          return (
+                            <div className="flex gap-3 overflow-x-auto pb-2">
+                              {photos.map(photo => (
+                                <div key={photo.key} className="min-w-[220px] rounded-lg overflow-hidden border border-white/10 bg-black/20">
+                                  <div className="relative">
+                                    <img
+                                      src={photo.url}
+                                      className="w-full h-28 object-cover"
+                                      alt={`Рейс #${photo.tripNumber} - ${photoTypeLabels[photo.type] || 'Фото'}`}
+                                    />
+                                    <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-[8px] text-white px-2 py-1 text-center">
+                                      {photoTypeLabels[photo.type] || 'Фото'} · Рейс #{photo.tripNumber}
+                                    </div>
                                   </div>
-                                  {ev.driverName && (
-                                    <div className="text-[9px] text-slate-500 mt-1">Водитель: {ev.driverName}</div>
-                                  )}
+                                  <div className="p-2 text-[9px] text-slate-400">
+                                    <div className="font-black text-slate-300 truncate">{photo.address || 'Адрес не указан'}</div>
+                                    <div>{formatDateTime(photo.timestamp)}</div>
+                                    {photo.driverName && (
+                                      <div className="text-[8px] text-slate-500 truncate">Водитель: {photo.driverName}</div>
+                                    )}
+                                  </div>
                                 </div>
-                                {allPhotos.length > 0 ? (
-                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 p-3">
-                                    {allPhotos.map((photo, idx) => (
-                                      <div key={idx} className="relative rounded-lg overflow-hidden border border-white/10">
-                                        <img
-                                          src={photo.url}
-                                          className="w-full h-24 object-cover"
-                                          alt={`Рейс #${ev.tripNumber} - ${photoTypeLabels[photo.type] || 'Фото'}`}
-                                        />
-                                        <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-[8px] text-white px-1.5 py-0.5 text-center">
-                                          {photoTypeLabels[photo.type] || 'Фото'}
-                                        </div>
-                                        {photo.timestamp && (
-                                          <div className="absolute top-1 right-1 bg-black/60 text-[7px] text-white px-1 py-0.5 rounded">
-                                            {new Date(photo.timestamp).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}
-                                          </div>
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <div className="p-4 text-center text-[9px] text-slate-500">Нет фото</div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
 
@@ -1122,7 +1117,7 @@ ${confirmedEvidences.map((ev, i) =>
               </div>
             ) : (
               filteredCompletedOrders.map(order => {
-                const totals = calculateOrderTotals(order);
+                const totals = calculateOrderTotalsLocal(order);
                 
                 return (
                   <div key={order.id} className="bg-[#12192c] p-6 rounded-[2rem] border border-white/5 shadow-2xl">
@@ -1206,23 +1201,48 @@ ${confirmedEvidences.map((ev, i) =>
                     {getConfirmedEvidences(order).length > 0 && (
                       <div className="mt-6">
                         <div className="text-[10px] font-black text-slate-500 uppercase mb-3">Фото рейсов</div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                          {getConfirmedEvidences(order).slice().reverse().map(ev => (
-                            <div key={ev.id} className="bg-white/5 rounded-2xl overflow-hidden border border-white/5">
-                              <div className="relative">
-                                <img
-                                  src={ev.photos?.[0]?.url || ev.photo}
-                                  className="w-full h-28 object-cover"
-                                  alt={`Рейс #${ev.tripNumber}`}
-                                />
-                                <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[9px] text-white px-2 py-1 flex justify-between">
-                                  <span>Рейс #{ev.tripNumber}</span>
-                                  <span>{formatDateTime(ev.timestamp)}</span>
+                        {(() => {
+                          const confirmedPhotos = getConfirmedEvidences(order)
+                            .slice()
+                            .reverse()
+                            .flatMap(ev => {
+                              const allPhotos = ev.photos && ev.photos.length > 0
+                                ? ev.photos
+                                : (ev.photo ? [{ url: ev.photo, type: 'other' as const, timestamp: ev.timestamp }] : []);
+                              return allPhotos.map((photo, idx) => ({
+                                key: `${ev.id}-${idx}`,
+                                url: photo.url,
+                                timestamp: photo.timestamp || ev.timestamp,
+                                address: ev.address || order.address,
+                                tripNumber: ev.tripNumber
+                              }));
+                            });
+                          if (confirmedPhotos.length === 0) {
+                            return <div className="p-4 text-center text-[9px] text-slate-500">Нет фото</div>;
+                          }
+                          return (
+                            <div className="flex gap-3 overflow-x-auto pb-2">
+                              {confirmedPhotos.map(photo => (
+                                <div key={photo.key} className="min-w-[220px] rounded-lg overflow-hidden border border-white/10 bg-black/20">
+                                  <div className="relative">
+                                    <img
+                                      src={photo.url}
+                                      className="w-full h-28 object-cover"
+                                      alt={`Рейс #${photo.tripNumber}`}
+                                    />
+                                    <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[9px] text-white px-2 py-1">
+                                      Рейс #{photo.tripNumber}
+                                    </div>
+                                  </div>
+                                  <div className="p-2 text-[9px] text-slate-400">
+                                    <div className="font-black text-slate-300 truncate">{photo.address || 'Адрес не указан'}</div>
+                                    <div>{formatDateTime(photo.timestamp)}</div>
+                                  </div>
                                 </div>
-                              </div>
+                              ))}
                             </div>
-                          ))}
-                        </div>
+                          );
+                        })()}
                       </div>
                     )}
 

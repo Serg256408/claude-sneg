@@ -1359,7 +1359,7 @@ const STATUS_LABELS: Record<OrderStatus, string> = {
   [OrderStatus.EN_ROUTE]: 'В пути',
   [OrderStatus.IN_PROGRESS]: 'В работе',
   [OrderStatus.EXPORT_COMPLETED]: 'Вывоз завершён',
-  [OrderStatus.AWAITING_CLOSING_DOCS]: 'Подготовка документов',
+  [OrderStatus.AWAITING_CLOSING_DOCS]: 'Подготовка закрывающих документов',
   [OrderStatus.CLOSING_DOCS_SENT]: 'Документы отправлены',
   [OrderStatus.REPORT_READY]: 'Отчёт готов',
   [OrderStatus.COMPLETED]: 'Завершено',
@@ -1435,8 +1435,11 @@ export const normalizeOrderStatus = (status?: OrderStatus) => {
       return OrderStatus.NEW_REQUEST;
     case OrderStatus.CALCULATING:
     case OrderStatus.AWAITING_CUSTOMER:
+    case OrderStatus.CONTRACT_SIGNING:
+    case OrderStatus.AWAITING_PREPAYMENT:
       return OrderStatus.AWAITING_CUSTOMER;
     case OrderStatus.CONFIRMED_BY_CUSTOMER:
+    case OrderStatus.SCHEDULING:
     case OrderStatus.SEARCHING_EQUIPMENT:
       return OrderStatus.SEARCHING_EQUIPMENT;
     case OrderStatus.EQUIPMENT_APPROVED:
@@ -1444,8 +1447,11 @@ export const normalizeOrderStatus = (status?: OrderStatus) => {
     case OrderStatus.EN_ROUTE:
       return OrderStatus.EN_ROUTE;
     case OrderStatus.IN_PROGRESS:
+    case OrderStatus.DISPUTE:
       return OrderStatus.IN_PROGRESS;
     case OrderStatus.EXPORT_COMPLETED:
+    case OrderStatus.AWAITING_CLOSING_DOCS:
+    case OrderStatus.CLOSING_DOCS_SENT:
     case OrderStatus.REPORT_READY:
     case OrderStatus.COMPLETED:
       return OrderStatus.COMPLETED;
@@ -1457,6 +1463,11 @@ export const normalizeOrderStatus = (status?: OrderStatus) => {
 };
 
 export const getOrderStatusLabel = (status?: OrderStatus) => {
+  if (!status) return STATUS_LABELS[OrderStatus.NEW_REQUEST];
+  return STATUS_LABELS[status] || STATUS_LABELS[OrderStatus.NEW_REQUEST];
+};
+
+export const getNormalizedStatusLabel = (status?: OrderStatus) => {
   const normalized = normalizeOrderStatus(status);
   return STATUS_LABELS[normalized];
 };
@@ -1539,6 +1550,150 @@ export const formatDateTime = (isoString: string) => {
 // Форматирование цены
 export const formatPrice = (price: number) => {
   return price.toLocaleString('ru-RU') + ' ₽';
+};
+
+type UnitsMode = 'planned' | 'actual' | 'confirmed' | 'actual_or_planned';
+
+export const isTruckType = (type: AssetType) => {
+  return [AssetType.TRUCK, AssetType.TRUCK_20, AssetType.TRUCK_25].includes(type);
+};
+
+export const isLoaderType = (type: AssetType) => {
+  return [AssetType.LOADER, AssetType.LOADER_JCB, AssetType.FRONT_LOADER, AssetType.MINI_LOADER].includes(type);
+};
+
+export const getTripCounts = (order: Order) => {
+  const planned = order.plannedTrips || 0;
+  const actual = (order.evidences || []).length;
+  const confirmed = (order.evidences || []).filter(e => e.confirmed).length;
+  return { planned, actual, confirmed };
+};
+
+export const getShiftHours = (start?: string, end?: string, mode: UnitsMode = 'confirmed') => {
+  if (!start || !end) return 0;
+  const parseTime = (value: string) => {
+    if (/^\d{1,2}:\d{2}/.test(value)) {
+      const [hh, mm] = value.split(':').map(Number);
+      const d = new Date();
+      d.setHours(hh, mm, 0, 0);
+      return d;
+    }
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+  const startDate = parseTime(start);
+  const endDate = parseTime(end);
+  if (!startDate || !endDate) return 0;
+  let diff = (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60);
+  if (diff < 0) diff += 24;
+  return Math.max(0, diff);
+};
+
+export const getUnitsForRequirement = (order: Order, req: AssetRequirement, options?: { mode?: UnitsMode }) => {
+  const mode = options?.mode ?? 'actual_or_planned';
+  const normalized = normalizeOrderStatus(order.status);
+  const tripCounts = getTripCounts(order);
+  const plannedUnits = req.plannedUnits || 0;
+  const assignments = (order.driverDetails || []).filter(d => d.assetType === req.type);
+  const startedCount = assignments.filter(d => d.shiftStartTime).length;
+  const completedCount = assignments.filter(d => d.shiftEndTime).length;
+  const assignmentCount = assignments.length;
+  const hours = assignments.reduce((sum, d) => sum + getShiftHours(d.shiftStartTime, d.shiftEndTime, mode), 0);
+
+  const selectByMode = (actualValue: number, confirmedValue: number, plannedValue: number) => {
+    if (mode === 'planned') return plannedValue;
+    if (mode === 'actual') return actualValue;
+    if (mode === 'confirmed') return confirmedValue;
+    if (normalized === OrderStatus.COMPLETED) return confirmedValue;
+    return actualValue > 0 ? actualValue : plannedValue;
+  };
+
+  if (req.priceUnit === PriceUnit.PER_TRIP && isTruckType(req.type)) {
+    return selectByMode(tripCounts.actual, tripCounts.confirmed, tripCounts.planned);
+  }
+  if (req.priceUnit === PriceUnit.PER_SHIFT) {
+    return selectByMode(startedCount, completedCount, plannedUnits);
+  }
+  if (req.priceUnit === PriceUnit.PER_HOUR) {
+    return selectByMode(hours, hours, plannedUnits);
+  }
+  return selectByMode(assignmentCount, assignmentCount, plannedUnits);
+};
+
+export const calculateOrderTotals = (
+  order: Order,
+  options?: { mode?: UnitsMode; includeCharges?: boolean }
+) => {
+  const mode = options?.mode ?? 'actual_or_planned';
+  const includeCharges = options?.includeCharges ?? false;
+  let customerTotal = 0;
+  let contractorTotal = 0;
+
+  (order.assetRequirements || []).forEach(req => {
+    const units = getUnitsForRequirement(order, req, { mode });
+    customerTotal += units * (req.customerPrice || 0);
+    contractorTotal += units * (req.contractorPrice || 0);
+    if (includeCharges) {
+      if (req.minimalCharge) customerTotal += req.minimalCharge;
+      if (req.deliveryCharge) customerTotal += req.deliveryCharge;
+    }
+  });
+
+  return { customerTotal, contractorTotal, margin: customerTotal - contractorTotal };
+};
+
+export const calculateAssignmentEarnings = (order: Order, assignment: DriverAssignment) => {
+  const matchedRequirement = order.assetRequirements.find(r =>
+    r.type === assignment.assetType ||
+    (isLoaderType(r.type) && isLoaderType(assignment.assetType)) ||
+    (isTruckType(r.type) && isTruckType(assignment.assetType))
+  );
+  const pricePerUnit = assignment.assignedPrice || matchedRequirement?.contractorPrice || 0;
+  const evidences = (order.evidences || []).filter(e =>
+    assignment.id ? e.assignmentId === assignment.id : e.driverName === assignment.driverName
+  );
+  const confirmedTrips = evidences.filter(e => e.confirmed).length;
+  const totalTrips = evidences.length;
+  const shiftHours = getShiftHours(assignment.shiftStartTime, assignment.shiftEndTime, 'confirmed');
+  const effectivePriceUnit =
+    assignment.priceUnit === PriceUnit.PER_TRIP && isLoaderType(assignment.assetType)
+      ? PriceUnit.PER_SHIFT
+      : assignment.priceUnit;
+
+  let confirmedUnits = 0;
+  let pendingUnits = 0;
+  let confirmedAmount = 0;
+  let pendingAmount = 0;
+
+  if (effectivePriceUnit === PriceUnit.PER_SHIFT) {
+    confirmedUnits = assignment.shiftEndTime ? 1 : 0;
+    pendingUnits = assignment.shiftStartTime ? (assignment.shiftEndTime ? 0 : 1) : 0;
+    if (confirmedUnits > 0) {
+      const hourlyRate = pricePerUnit / 8;
+      const computedByHours = shiftHours > 7 ? hourlyRate * shiftHours : pricePerUnit;
+      confirmedAmount = Math.max(pricePerUnit, computedByHours);
+    }
+    if (pendingUnits > 0) {
+      pendingAmount = pricePerUnit;
+    }
+  } else if (effectivePriceUnit === PriceUnit.PER_HOUR) {
+    confirmedUnits = shiftHours;
+    pendingUnits = 0;
+    confirmedAmount = confirmedUnits * pricePerUnit;
+  } else {
+    confirmedUnits = confirmedTrips;
+    pendingUnits = totalTrips - confirmedTrips;
+    confirmedAmount = confirmedUnits * pricePerUnit;
+    pendingAmount = pendingUnits * pricePerUnit;
+  }
+
+  return {
+    confirmedUnits,
+    pendingUnits,
+    pricePerUnit,
+    confirmedAmount,
+    pendingAmount
+  };
 };
 
 // Генератор номера лида

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Order, OrderStatus, TripEvidence, Contractor, AssetType, DriverAssignment, formatPrice, formatDateTime, generateId, DateRange, isOrderInDateRange, normalizeOrderStatus, getOrderStatusLabel } from './types';
+import { Order, OrderStatus, TripEvidence, Contractor, AssetType, DriverAssignment, formatPrice, formatDateTime, generateId, DateRange, isOrderInDateRange, normalizeOrderStatus, getOrderStatusLabel, calculateAssignmentEarnings, PriceUnit } from './types';
 
 interface DriverPortalProps {
   orders: Order[];
@@ -178,17 +178,12 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
       );
       
       myAssignments.forEach(myAssignment => {
-        // Рейсы этого конкретного водителя
-        const myEvidences = (o.evidences || []).filter(e => e.driverName === myAssignment.driverName);
-        
-        if (myEvidences.length > 0) {
-          const pricePerTrip = myAssignment.assignedPrice || 
-            o.assetRequirements.find(r => r.type === myAssignment.assetType)?.contractorPrice || 0;
-          
-          totalTrips += myEvidences.length;
-          confirmedTrips += myEvidences.filter(e => e.confirmed).length;
-          totalPreliminary += myEvidences.length * pricePerTrip;
-          totalConfirmed += myEvidences.filter(e => e.confirmed).length * pricePerTrip;
+        const earnings = calculateAssignmentEarnings(o, myAssignment);
+        totalPreliminary += earnings.confirmedAmount + earnings.pendingAmount;
+        totalConfirmed += earnings.confirmedAmount;
+        if (myAssignment.priceUnit === PriceUnit.PER_TRIP) {
+          totalTrips += earnings.confirmedUnits + earnings.pendingUnits;
+          confirmedTrips += earnings.confirmedUnits;
         }
       });
     });
@@ -314,14 +309,13 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
     if (!activeSelectedOrder) return { preliminary: 0, confirmed: 0 };
     
     const myAssignment = (activeSelectedOrder.driverDetails || []).find(d => d.driverName === driverName);
-    const pricePerTrip = myAssignment?.assignedPrice ||
-      activeSelectedOrder.assetRequirements.find(r => r.type === selectedOrder?.type)?.contractorPrice || 0;
-    
+    if (!myAssignment) return { preliminary: 0, confirmed: 0 };
+    const earnings = calculateAssignmentEarnings(activeSelectedOrder, myAssignment);
     return {
-      preliminary: driverEvidences.length * pricePerTrip,
-      confirmed: confirmedCount * pricePerTrip
+      preliminary: earnings.confirmedAmount + earnings.pendingAmount,
+      confirmed: earnings.confirmedAmount
     };
-  }, [activeSelectedOrder, driverEvidences, confirmedCount, driverName, selectedOrder]);
+  }, [activeSelectedOrder, driverName]);
 
   const photoTypeLabels = {
     loading: '📦 Погрузка',
@@ -336,97 +330,98 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
 
   return (
     <div className={containerClass}>
-      {/* HEADER */}
-      <div className="p-4 bg-[#12192c] border-b border-white/5 shadow-2xl sticky top-0 z-30">
-        <div className="flex justify-between items-center mb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-700 rounded-xl flex items-center justify-center font-black text-xl shadow-lg">
-              {driverName.charAt(0)}
-            </div>
-            <div>
-              <h2 className="text-sm font-black uppercase truncate max-w-[180px]">{driverName}</h2>
-              <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${currentPosition ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
-                <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest">
-                  {currentPosition ? 'GPS активен' : 'GPS недоступен'}
-                </p>
+      {!embedded && (
+        <div className="p-4 bg-[#12192c] border-b border-white/5 shadow-2xl sticky top-0 z-30">
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-700 rounded-xl flex items-center justify-center font-black text-xl shadow-lg">
+                {driverName.charAt(0)}
+              </div>
+              <div>
+                <h2 className="text-sm font-black uppercase truncate max-w-[180px]">{driverName}</h2>
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${currentPosition ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+                  <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest">
+                    {currentPosition ? 'GPS активен' : 'GPS недоступен'}
+                  </p>
+                </div>
               </div>
             </div>
+            
+            <div className="text-right">
+              <div className="text-lg font-black text-green-400">{formatPrice(earningsData.totalConfirmed)}</div>
+              <div className="text-[8px] text-slate-500 uppercase">Подтверждено</div>
+            </div>
           </div>
-          
-          {/* Мини-статистика */}
-          <div className="text-right">
-            <div className="text-lg font-black text-green-400">{formatPrice(earningsData.totalConfirmed)}</div>
-            <div className="text-[8px] text-slate-500 uppercase">Подтверждено</div>
-          </div>
-        </div>
 
-        {/* Табы */}
-        <div className="grid grid-cols-4 bg-[#1c2641] p-1 rounded-xl border border-white/5 gap-1">
-          <button 
-            onClick={() => { setActiveTab('mine'); setSelectedOrder(null); }} 
-            className={`py-2.5 text-[8px] font-black uppercase rounded-lg transition-all flex flex-col items-center gap-1 ${activeTab === 'mine' ? 'bg-white text-slate-900 shadow-xl' : 'text-slate-500'}`}
-          >
-            <span>🚛</span>
-            <span>В работе</span>
-            {filteredMyJobs.length > 0 && <span className="bg-blue-500 text-white text-[7px] px-1.5 rounded-full">{filteredMyJobs.length}</span>}
-          </button>
-          <button 
-            onClick={() => { setActiveTab('company'); setSelectedOrder(null); }} 
-            className={`py-2.5 text-[8px] font-black uppercase rounded-lg transition-all flex flex-col items-center gap-1 ${activeTab === 'company' ? 'bg-orange-500 text-white shadow-xl' : 'text-slate-500'}`}
-          >
-            <span>📨</span>
-            <span>Прямые</span>
-            {filteredCompanyBoard.length > 0 && <span className="bg-orange-400 text-white text-[7px] px-1.5 rounded-full">{filteredCompanyBoard.length}</span>}
-          </button>
-          <button 
-            onClick={() => { setActiveTab('public'); setSelectedOrder(null); }} 
-            className={`py-2.5 text-[8px] font-black uppercase rounded-lg transition-all flex flex-col items-center gap-1 ${activeTab === 'public' ? 'bg-blue-600 text-white shadow-xl' : 'text-slate-500'}`}
-          >
-            <span>🌐</span>
-            <span>Биржа</span>
-            {filteredPublicBoard.length > 0 && <span className="bg-blue-400 text-white text-[7px] px-1.5 rounded-full">{filteredPublicBoard.length}</span>}
-          </button>
-          <button 
-            onClick={() => { setActiveTab('earnings'); setSelectedOrder(null); }} 
-            className={`py-2.5 text-[8px] font-black uppercase rounded-lg transition-all flex flex-col items-center gap-1 ${activeTab === 'earnings' ? 'bg-green-600 text-white shadow-xl' : 'text-slate-500'}`}
-          >
-            <span>💰</span>
-            <span>Заработок</span>
-          </button>
+          <div className="grid grid-cols-4 bg-[#1c2641] p-1 rounded-xl border border-white/5 gap-1">
+            <button 
+              onClick={() => { setActiveTab('mine'); setSelectedOrder(null); }} 
+              className={`py-2.5 text-[8px] font-black uppercase rounded-lg transition-all flex flex-col items-center gap-1 ${activeTab === 'mine' ? 'bg-white text-slate-900 shadow-xl' : 'text-slate-500'}`}
+            >
+              <span>🚛</span>
+              <span>В работе</span>
+              {filteredMyJobs.length > 0 && <span className="bg-blue-500 text-white text-[7px] px-1.5 rounded-full">{filteredMyJobs.length}</span>}
+            </button>
+            <button 
+              onClick={() => { setActiveTab('company'); setSelectedOrder(null); }} 
+              className={`py-2.5 text-[8px] font-black uppercase rounded-lg transition-all flex flex-col items-center gap-1 ${activeTab === 'company' ? 'bg-orange-500 text-white shadow-xl' : 'text-slate-500'}`}
+            >
+              <span>📨</span>
+              <span>Прямые</span>
+              {filteredCompanyBoard.length > 0 && <span className="bg-orange-400 text-white text-[7px] px-1.5 rounded-full">{filteredCompanyBoard.length}</span>}
+            </button>
+            <button 
+              onClick={() => { setActiveTab('public'); setSelectedOrder(null); }} 
+              className={`py-2.5 text-[8px] font-black uppercase rounded-lg transition-all flex flex-col items-center gap-1 ${activeTab === 'public' ? 'bg-blue-600 text-white shadow-xl' : 'text-slate-500'}`}
+            >
+              <span>🌐</span>
+              <span>Биржа</span>
+              {filteredPublicBoard.length > 0 && <span className="bg-blue-400 text-white text-[7px] px-1.5 rounded-full">{filteredPublicBoard.length}</span>}
+            </button>
+            <button 
+              onClick={() => { setActiveTab('earnings'); setSelectedOrder(null); }} 
+              className={`py-2.5 text-[8px] font-black uppercase rounded-lg transition-all flex flex-col items-center gap-1 ${activeTab === 'earnings' ? 'bg-green-600 text-white shadow-xl' : 'text-slate-500'}`}
+            >
+              <span>💰</span>
+              <span>Заработок</span>
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* CONTENT */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-40 no-scrollbar">
-        <div className="flex flex-wrap items-center gap-2 bg-[#12192c] border border-white/5 rounded-2xl p-3">
-          <span className="text-[9px] font-black uppercase text-slate-500">С</span>
-          <input
-            type="datetime-local"
-            value={dateFrom}
-            onChange={e => setDateFrom(e.target.value)}
-            className="bg-[#0a0f1d] border border-white/10 rounded-xl px-3 py-2 text-[10px] font-bold outline-none focus:border-blue-500"
-          />
-          <span className="text-[9px] font-black uppercase text-slate-500">По</span>
-          <input
-            type="datetime-local"
-            value={dateTo}
-            onChange={e => setDateTo(e.target.value)}
-            className="bg-[#0a0f1d] border border-white/10 rounded-xl px-3 py-2 text-[10px] font-bold outline-none focus:border-blue-500"
-          />
-          {(dateFrom || dateTo) && (
-            <button
-              type="button"
-              onClick={() => {
-                setDateFrom('');
-                setDateTo('');
-              }}
-              className="ml-auto bg-white/10 text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-white/20 transition-all"
-            >
-              Сбросить фильтры
-            </button>
-          )}
-        </div>
+        {!embedded && (
+          <div className="flex flex-wrap items-center gap-2 bg-[#12192c] border border-white/5 rounded-2xl p-3">
+            <span className="text-[9px] font-black uppercase text-slate-500">С</span>
+            <input
+              type="datetime-local"
+              value={dateFrom}
+              onChange={e => setDateFrom(e.target.value)}
+              className="bg-[#0a0f1d] border border-white/10 rounded-xl px-3 py-2 text-[10px] font-bold outline-none focus:border-blue-500"
+            />
+            <span className="text-[9px] font-black uppercase text-slate-500">По</span>
+            <input
+              type="datetime-local"
+              value={dateTo}
+              onChange={e => setDateTo(e.target.value)}
+              className="bg-[#0a0f1d] border border-white/10 rounded-xl px-3 py-2 text-[10px] font-bold outline-none focus:border-blue-500"
+            />
+            {(dateFrom || dateTo) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDateFrom('');
+                  setDateTo('');
+                }}
+                className="ml-auto bg-white/10 text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-white/20 transition-all"
+              >
+                Сбросить фильтры
+              </button>
+            )}
+          </div>
+        )}
         
         {/* Вкладка заработка */}
         {activeTab === 'earnings' && (
@@ -455,8 +450,11 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
               <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">История по объектам</h4>
               {orders.filter(o => (o.evidences || []).some(e => e.driverName === driverName)).map(order => {
                 const myEvs = (order.evidences || []).filter(e => e.driverName === driverName);
-                const confirmed = myEvs.filter(e => e.confirmed).length;
-                const pricePerTrip = order.assetRequirements[0]?.contractorPrice || 0;
+                const myAssignment = (order.driverDetails || []).find(d => d.driverName === driverName);
+                const earnings = myAssignment ? calculateAssignmentEarnings(order, myAssignment) : null;
+                const confirmed = earnings ? earnings.confirmedUnits : myEvs.filter(e => e.confirmed).length;
+                const totalUnits = earnings ? earnings.confirmedUnits + earnings.pendingUnits : myEvs.length;
+                const confirmedAmount = earnings ? earnings.confirmedAmount : 0;
                 
                 return (
                   <div key={order.id} className="bg-[#12192c] p-4 rounded-2xl border border-white/5">
@@ -466,14 +464,14 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                         <div className="text-[9px] text-slate-500">{formatDateTime(order.createdAt)}</div>
                       </div>
                       <div className="text-right">
-                        <div className="text-green-400 font-black">{formatPrice(confirmed * pricePerTrip)}</div>
-                        <div className="text-[8px] text-slate-500">{confirmed} / {myEvs.length} рейсов</div>
+                        <div className="text-green-400 font-black">{formatPrice(confirmedAmount)}</div>
+                        <div className="text-[8px] text-slate-500">{confirmed} / {totalUnits} рейсов</div>
                       </div>
                     </div>
                     <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
                       <div 
                         className="h-full bg-green-500 transition-all" 
-                        style={{ width: `${myEvs.length > 0 ? (confirmed / myEvs.length) * 100 : 0}%` }}
+                        style={{ width: `${totalUnits > 0 ? (confirmed / totalUnits) * 100 : 0}%` }}
                       />
                     </div>
                   </div>
@@ -486,8 +484,14 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
         {/* Список заказов */}
         {activeTab !== 'earnings' && !activeSelectedOrder && (
           displayJobs.length > 0 ? (
-            displayJobs.map(({ order: job, type }, idx) => {
-              const priceForDriver = job.assetRequirements.find(r => r.type === type)?.contractorPrice || 0;
+              displayJobs.map(({ order: job, type }, idx) => {
+              const requirement = job.assetRequirements.find(r => r.type === type);
+              const priceForDriver = requirement?.contractorPrice || 0;
+              const unitLabel = requirement?.priceUnit === PriceUnit.PER_HOUR
+                ? 'за час'
+                : requirement?.priceUnit === PriceUnit.PER_SHIFT
+                ? 'за смену'
+                : 'за рейс';
               const isUrgent = new Date(job.scheduledTime).getTime() - Date.now() < 3600000;
               
               return (
@@ -522,7 +526,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                   <div className="flex justify-between items-end pt-3 border-t border-white/5">
                     <div>
                       <div className="text-2xl font-black text-green-400">{formatPrice(priceForDriver)}</div>
-                      <div className="text-[8px] text-slate-500 uppercase">за рейс</div>
+                      <div className="text-[8px] text-slate-500 uppercase">{unitLabel}</div>
                     </div>
                     <div className="text-right">
                       <span className="text-[9px] font-black uppercase text-slate-500 flex items-center gap-1">
