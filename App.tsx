@@ -53,13 +53,13 @@ import {
 type Role = 'dispatcher' | 'customer' | 'contractor' | 'sales_manager' | 'estimator' | 'accountant' | 'admin';
 
 const ROLE_LABELS: Record<Role, string> = {
-  dispatcher: 'Р”РёСЃРїРµС‚С‡РµСЂ',
-  customer: 'РљР»РёРµРЅС‚',
-  contractor: 'РџРѕРґСЂСЏРґС‡РёРєРё',
-  sales_manager: 'РњРµРЅРµРґР¶РµСЂ',
-  estimator: 'РЎРјРµС‚С‡РёРє',
-  accountant: 'Р‘СѓС…РіР°Р»С‚РµСЂ',
-  admin: 'РђРґРјРёРЅ',
+  dispatcher: 'Диспетчер',
+  customer: 'Клиент',
+  contractor: 'Подрядчики',
+  sales_manager: 'Менеджер',
+  estimator: 'Сметчик',
+  accountant: 'Бухгалтер',
+  admin: 'Админ',
 };
 
 const LS_KEYS = {
@@ -571,8 +571,12 @@ export default function App() {
   const [commissionSettings, setCommissionSettings] = useState<CommissionSettings | null>(() => safeJsonParse(localStorage.getItem(LS_KEYS.commissionSettings), null));
   const [vehicles, setVehicles] = useState<Vehicle[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.vehicles), seedVehicles()));
 
-  const [view, setView] = useState<'dashboard' | 'order-form' | 'customer-form' | 'contractor-form'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'order-form' | 'customer-form' | 'contractor-form' | 'customers' | 'contractors'>('dashboard');
   const [editingOrder, setEditingOrder] = useState<Order | undefined>(undefined);
+  const [editingCustomer, setEditingCustomer] = useState<Customer | undefined>(undefined);
+  const [editingContractor, setEditingContractor] = useState<Contractor | undefined>(undefined);
+  const [customerReturnView, setCustomerReturnView] = useState<'dashboard' | 'customers' | 'order-form'>('dashboard');
+  const [contractorReturnView, setContractorReturnView] = useState<'dashboard' | 'contractors' | 'order-form'>('dashboard');
   const [selectedMapOrder, setSelectedMapOrder] = useState<Order | null>(null);
   const [orderSearch, setOrderSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | OrderStatus>('all');
@@ -582,6 +586,8 @@ export default function App() {
   const [customerFilterText, setCustomerFilterText] = useState('');
   const [customerFilterId, setCustomerFilterId] = useState<string | null>(null);
   const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
+  const [customerDirectorySearch, setCustomerDirectorySearch] = useState('');
+  const [contractorDirectorySearch, setContractorDirectorySearch] = useState('');
 
   const [currentContractorId, setCurrentContractorId] = useState<string>(() => localStorage.getItem(LS_KEYS.contractorId) || contractors[0]?.id || '');
   // Persist
@@ -641,6 +647,28 @@ export default function App() {
     statusFilter !== 'all' ||
     sortOrder !== 'newest'
   );
+
+  const filteredCustomers = useMemo(() => {
+    const term = customerDirectorySearch.trim().toLowerCase();
+    if (!term) return customers;
+    return customers.filter(c =>
+      c.name.toLowerCase().includes(term) ||
+      (c.phone || '').toLowerCase().includes(term) ||
+      (c.email || '').toLowerCase().includes(term) ||
+      (c.inn || '').toLowerCase().includes(term)
+    );
+  }, [customers, customerDirectorySearch]);
+
+  const filteredContractors = useMemo(() => {
+    const term = contractorDirectorySearch.trim().toLowerCase();
+    if (!term) return contractors;
+    return contractors.filter(c =>
+      c.name.toLowerCase().includes(term) ||
+      (c.phone || '').toLowerCase().includes(term) ||
+      (c.email || '').toLowerCase().includes(term) ||
+      (c.inn || '').toLowerCase().includes(term)
+    );
+  }, [contractors, contractorDirectorySearch]);
 
   useEffect(() => {
     if (!selectedMapOrder) return;
@@ -749,13 +777,11 @@ export default function App() {
   const addCustomer = useCallback((customer: Customer) => {
     const normalized = normalizeCustomer(customer);
     setCustomers(prev => [normalized, ...prev.filter(c => c.id !== normalized.id)]);
-    setView('dashboard');
   }, []);
 
   const addContractor = useCallback((contractor: Contractor) => {
     const normalized = normalizeContractor(contractor);
     setContractors(prev => [normalized, ...prev.filter(c => c.id !== normalized.id)]);
-    setView('dashboard');
   }, []);
 
   // Contractor actions
@@ -1066,19 +1092,55 @@ export default function App() {
             ))}
           </select>
           <button
+            className={`rounded-xl border px-4 py-2 text-sm font-black ${
+              view === 'customers' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+            }`}
+            onClick={() => {
+              setView('customers');
+              setSelectedMapOrder(null);
+            }}
+          >
+            Клиенты
+          </button>
+          <button
+            className={`rounded-xl border px-4 py-2 text-sm font-black ${
+              view === 'contractors' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+            }`}
+            onClick={() => {
+              setView('contractors');
+              setSelectedMapOrder(null);
+            }}
+          >
+            Подрядчики
+          </button>
+          <button
             className="rounded-xl bg-slate-900 text-white px-4 py-2 text-sm font-black"
             onClick={() => {
               setEditingOrder(undefined);
               setView('order-form');
             }}
           >
-            + Р—Р°РєР°Р·
+            + Заказ
           </button>
-          <button className="rounded-xl bg-white border border-slate-200 px-4 py-2 text-sm font-black" onClick={() => setView('customer-form')}>
-            + РљР»РёРµРЅС‚
+          <button
+            className="rounded-xl bg-white border border-slate-200 px-4 py-2 text-sm font-black"
+            onClick={() => {
+              setEditingCustomer(undefined);
+              setCustomerReturnView(view === 'customers' ? 'customers' : view === 'order-form' ? 'order-form' : 'dashboard');
+              setView('customer-form');
+            }}
+          >
+            + Клиент
           </button>
-          <button className="rounded-xl bg-white border border-slate-200 px-4 py-2 text-sm font-black" onClick={() => setView('contractor-form')}>
-            + РџРѕРґСЂСЏРґС‡РёРє
+          <button
+            className="rounded-xl bg-white border border-slate-200 px-4 py-2 text-sm font-black"
+            onClick={() => {
+              setEditingContractor(undefined);
+              setContractorReturnView(view === 'contractors' ? 'contractors' : view === 'order-form' ? 'order-form' : 'dashboard');
+              setView('contractor-form');
+            }}
+          >
+            + Подрядчик
           </button>
         </div>
       );
@@ -1099,7 +1161,7 @@ export default function App() {
       );
     }
     return null;
-  }, [contractors, currentContractorId, currentManager, role]);
+  }, [contractors, currentContractorId, currentManager, role, view]);
 
   const buildTag = `BUILD: ${new Date().toLocaleString()}`;
 
@@ -1146,8 +1208,8 @@ export default function App() {
             <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-2xl p-6">
               <div className="flex items-center justify-between gap-4 mb-4">
                 <div>
-                  <div className="text-xs font-black uppercase tracking-widest text-slate-400">Р—Р°РєР°Р·С‹</div>
-                  <div className="text-2xl font-black tracking-tight">РџР°РЅРµР»СЊ РґРёСЃРїРµС‚С‡РµСЂР°</div>
+                  <div className="text-xs font-black uppercase tracking-widest text-slate-400">Заказы</div>
+                  <div className="text-2xl font-black tracking-tight">Панель диспетчера</div>
                 </div>
                 {selectedMapOrder && (
                   <button
@@ -1157,7 +1219,7 @@ export default function App() {
                       setView('order-form');
                     }}
                   >
-                    Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ РІС‹Р±СЂР°РЅРЅС‹Р№
+                    Редактировать выбранный
                   </button>
                 )}
               </div>
@@ -1165,16 +1227,16 @@ export default function App() {
               <div className="mb-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="flex flex-wrap items-end gap-3">
                   <div className="flex min-w-[220px] flex-1 flex-col gap-1">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Р СџР С•Р С‘РЎРѓР С”</span>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Поиск</span>
                     <input
                       value={orderSearch}
                       onChange={e => setOrderSearch(e.target.value)}
-                      placeholder="Р СњР С•Р СР ВµРЎР‚, Р С”Р В»Р С‘Р ВµР Р…РЎвЂљ, Р В°Р Т‘РЎР‚Р ВµРЎРѓ"
+                      placeholder="Номер, клиент, адрес"
                       className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold"
                     />
                   </div>
                   <div className="relative flex w-full max-w-xs flex-col gap-1">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Р С™Р В»Р С‘Р ВµР Р…РЎвЂљ</span>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Клиент</span>
                     <input
                       value={customerFilterText}
                       onChange={e => {
@@ -1184,7 +1246,7 @@ export default function App() {
                       }}
                       onFocus={() => setShowCustomerSuggestions(true)}
                       onBlur={() => setTimeout(() => setShowCustomerSuggestions(false), 150)}
-                      placeholder="Р В¤Р С‘Р В»РЎРЉРЎвЂљРЎР‚ Р С—Р С• Р С”Р В»Р С‘Р ВµР Р…РЎвЂљРЎС“"
+                      placeholder="Фильтр по клиенту"
                       className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold"
                     />
                     {showCustomerSuggestions && customerSuggestions.length > 0 && (
@@ -1207,7 +1269,7 @@ export default function App() {
                     )}
                   </div>
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Р РЋ</span>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">С</span>
                     <input
                       type="datetime-local"
                       value={dateFrom}
@@ -1216,7 +1278,7 @@ export default function App() {
                     />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Р СџР С•</span>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">По</span>
                     <input
                       type="datetime-local"
                       value={dateTo}
@@ -1225,13 +1287,13 @@ export default function App() {
                     />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Р РЋРЎвЂљР В°РЎвЂљРЎС“РЎРѓ</span>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Статус</span>
                     <select
                       value={statusFilter}
                       onChange={e => setStatusFilter(e.target.value as OrderStatus | 'all')}
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold"
                     >
-                      <option value="all">Р вЂ™РЎРѓР Вµ РЎРѓРЎвЂљР В°РЎвЂљРЎС“РЎРѓРЎвЂ№</option>
+                      <option value="all">Все статусы</option>
                       {FULL_ORDER_STATUS_FLOW.map(status => (
                         <option key={status} value={status}>
                           {getOrderStatusLabel(status)}
@@ -1240,14 +1302,14 @@ export default function App() {
                     </select>
                   </div>
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Р РЋР С•РЎР‚РЎвЂљР С‘РЎР‚Р С•Р Р†Р С”Р В°</span>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Сортировка</span>
                     <select
                       value={sortOrder}
                       onChange={e => setSortOrder(e.target.value as 'newest' | 'oldest')}
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold"
                     >
-                      <option value="newest">Р РЋР Р…Р В°РЎвЂЎР В°Р В»Р В° Р Р…Р С•Р Р†РЎвЂ№Р Вµ</option>
-                      <option value="oldest">Р РЋР Р…Р В°РЎвЂЎР В°Р В»Р В° РЎРѓРЎвЂљР В°РЎР‚РЎвЂ№Р Вµ</option>
+                      <option value="newest">Сначала новые</option>
+                      <option value="oldest">Сначала старые</option>
                     </select>
                   </div>
                   {hasFilters && (
@@ -1265,7 +1327,7 @@ export default function App() {
                       }}
                       className="rounded-xl bg-slate-900 text-white px-4 py-2 text-xs font-black uppercase tracking-widest self-end"
                     >
-                      Р РЋР В±РЎР‚Р С•РЎРѓР С‘РЎвЂљРЎРЉ
+                      Сбросить
                     </button>
                   )}
                 </div>
@@ -1275,7 +1337,7 @@ export default function App() {
                 <table className="min-w-full text-sm">
                   <thead className="text-left text-slate-400 uppercase text-[10px] tracking-widest font-black">
                     <tr>
-                      <th className="py-2 pr-4">в„–</th>
+                      <th className="py-2 pr-4">№</th>
                       <th className="py-2 pr-4">РљР»РёРµРЅС‚</th>
                       <th className="py-2 pr-4">РђРґСЂРµСЃ</th>
                       <th className="py-2 pr-4">РЎС‚Р°С‚СѓСЃ</th>
@@ -1305,12 +1367,194 @@ export default function App() {
                                 setView('order-form');
                               }}
                             >
-                              РћС‚РєСЂС‹С‚СЊ
+                              Открыть
                             </button>
                           </td>
                         </tr>
                       );
                     })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {role === 'dispatcher' && view === 'customers' && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-2xl p-6">
+              <div className="flex items-center justify-between gap-4 mb-4">
+                <div>
+                  <div className="text-xs font-black uppercase tracking-widest text-slate-400">Справочник</div>
+                  <div className="text-2xl font-black tracking-tight">База клиентов</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="rounded-xl bg-slate-900 text-white px-4 py-2 text-sm font-black"
+                    onClick={() => {
+                      setEditingCustomer(undefined);
+                      setCustomerReturnView('customers');
+                      setView('customer-form');
+                    }}
+                  >
+                    + Новый клиент
+                  </button>
+                  <button
+                    className="rounded-xl bg-white border border-slate-200 px-4 py-2 text-sm font-black"
+                    onClick={() => setView('dashboard')}
+                  >
+                    Назад
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-end gap-3 mb-6">
+                <div className="flex min-w-[240px] flex-1 flex-col gap-1">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Поиск</span>
+                  <input
+                    value={customerDirectorySearch}
+                    onChange={e => setCustomerDirectorySearch(e.target.value)}
+                    placeholder="Имя, телефон, email, ИНН"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold"
+                  />
+                </div>
+                <span className="text-xs font-black text-slate-400 uppercase tracking-widest">Всего: {filteredCustomers.length}</span>
+              </div>
+
+              <div className="overflow-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="text-left text-slate-400 uppercase text-[10px] tracking-widest font-black">
+                    <tr>
+                      <th className="py-2 pr-4">Клиент</th>
+                      <th className="py-2 pr-4">Контакты</th>
+                      <th className="py-2 pr-4">ИНН</th>
+                      <th className="py-2 pr-4">Комментарий</th>
+                      <th className="py-2 pr-4">Действия</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredCustomers.map(c => (
+                      <tr key={c.id} className="hover:bg-slate-50">
+                        <td className="py-3 pr-4 font-black">{c.name}</td>
+                        <td className="py-3 pr-4">
+                          <div className="font-bold">{c.phone || '—'}</div>
+                          <div className="text-xs text-slate-400">{c.email || '—'}</div>
+                        </td>
+                        <td className="py-3 pr-4">{c.inn || '—'}</td>
+                        <td className="py-3 pr-4 max-w-xs truncate text-xs text-slate-500">{c.comment || '—'}</td>
+                        <td className="py-3 pr-4">
+                          <button
+                            className="rounded-xl bg-slate-900 text-white px-3 py-2 text-xs font-black"
+                            onClick={() => {
+                              setEditingCustomer(c);
+                              setCustomerReturnView('customers');
+                              setView('customer-form');
+                            }}
+                          >
+                            Редактировать
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredCustomers.length === 0 && (
+                      <tr>
+                        <td className="py-6 text-center text-sm text-slate-400" colSpan={5}>
+                          Клиенты не найдены
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {role === 'dispatcher' && view === 'contractors' && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-2xl p-6">
+              <div className="flex items-center justify-between gap-4 mb-4">
+                <div>
+                  <div className="text-xs font-black uppercase tracking-widest text-slate-400">Справочник</div>
+                  <div className="text-2xl font-black tracking-tight">База подрядчиков</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="rounded-xl bg-slate-900 text-white px-4 py-2 text-sm font-black"
+                    onClick={() => {
+                      setEditingContractor(undefined);
+                      setContractorReturnView('contractors');
+                      setView('contractor-form');
+                    }}
+                  >
+                    + Новый подрядчик
+                  </button>
+                  <button
+                    className="rounded-xl bg-white border border-slate-200 px-4 py-2 text-sm font-black"
+                    onClick={() => setView('dashboard')}
+                  >
+                    Назад
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-end gap-3 mb-6">
+                <div className="flex min-w-[240px] flex-1 flex-col gap-1">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Поиск</span>
+                  <input
+                    value={contractorDirectorySearch}
+                    onChange={e => setContractorDirectorySearch(e.target.value)}
+                    placeholder="Имя, телефон, email, ИНН"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold"
+                  />
+                </div>
+                <span className="text-xs font-black text-slate-400 uppercase tracking-widest">Всего: {filteredContractors.length}</span>
+              </div>
+
+              <div className="overflow-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="text-left text-slate-400 uppercase text-[10px] tracking-widest font-black">
+                    <tr>
+                      <th className="py-2 pr-4">Подрядчик</th>
+                      <th className="py-2 pr-4">Контакты</th>
+                      <th className="py-2 pr-4">Техника</th>
+                      <th className="py-2 pr-4">Комментарий</th>
+                      <th className="py-2 pr-4">Действия</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredContractors.map(c => (
+                      <tr key={c.id} className="hover:bg-slate-50">
+                        <td className="py-3 pr-4 font-black">{c.name}</td>
+                        <td className="py-3 pr-4">
+                          <div className="font-bold">{c.phone || '—'}</div>
+                          <div className="text-xs text-slate-400">{c.email || '—'}</div>
+                        </td>
+                        <td className="py-3 pr-4 max-w-xs truncate text-xs text-slate-500">
+                          {c.equipment && c.equipment.length > 0 ? c.equipment.join(', ') : '—'}
+                        </td>
+                        <td className="py-3 pr-4 max-w-xs truncate text-xs text-slate-500">{c.comments || '—'}</td>
+                        <td className="py-3 pr-4">
+                          <button
+                            className="rounded-xl bg-slate-900 text-white px-3 py-2 text-xs font-black"
+                            onClick={() => {
+                              setEditingContractor(c);
+                              setContractorReturnView('contractors');
+                              setView('contractor-form');
+                            }}
+                          >
+                            Редактировать
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredContractors.length === 0 && (
+                      <tr>
+                        <td className="py-6 text-center text-sm text-slate-400" colSpan={5}>
+                          Подрядчики не найдены
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -1330,23 +1574,47 @@ export default function App() {
               setEditingOrder(undefined);
               setView('dashboard');
             }}
-            onAddContractor={() => setView('contractor-form')}
-            onAddCustomer={() => setView('customer-form')}
+            onAddContractor={() => {
+              setEditingContractor(undefined);
+              setContractorReturnView('order-form');
+              setView('contractor-form');
+            }}
+            onAddCustomer={() => {
+              setEditingCustomer(undefined);
+              setCustomerReturnView('order-form');
+              setView('customer-form');
+            }}
             currentUser={currentManager}
           />
         )}
 
         {role === 'dispatcher' && view === 'customer-form' && (
           <CustomerFormDispatcher
-            onSubmit={addCustomer}
-            onCancel={() => setView('dashboard')}
+            initialData={editingCustomer}
+            onSubmit={data => {
+              addCustomer(data);
+              setEditingCustomer(undefined);
+              setView(customerReturnView);
+            }}
+            onCancel={() => {
+              setEditingCustomer(undefined);
+              setView(customerReturnView);
+            }}
           />
         )}
 
         {role === 'dispatcher' && view === 'contractor-form' && (
           <ContractorForm
-            onSubmit={addContractor}
-            onCancel={() => setView('dashboard')}
+            initialData={editingContractor}
+            onSubmit={data => {
+              addContractor(data);
+              setEditingContractor(undefined);
+              setView(contractorReturnView);
+            }}
+            onCancel={() => {
+              setEditingContractor(undefined);
+              setView(contractorReturnView);
+            }}
           />
         )}
 
@@ -1431,6 +1699,7 @@ export default function App() {
     </div>
   );
 }
+
 
 
 
