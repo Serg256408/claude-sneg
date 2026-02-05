@@ -1495,8 +1495,19 @@ export type DateRange = {
 
 const parseDateValue = (value?: string) => {
   if (!value) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split('-').map(Number);
+    const localDate = new Date(year, month - 1, day);
+    const time = localDate.getTime();
+    return Number.isNaN(time) ? null : time;
+  }
   const time = new Date(value).getTime();
   return Number.isNaN(time) ? null : time;
+};
+
+export const toLocalDateTimeInputValue = (date: Date = new Date()) => {
+  const pad = (value: number) => value.toString().padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
 export const isWithinDateRange = (value: string | undefined, range: DateRange) => {
@@ -1508,7 +1519,10 @@ export const isWithinDateRange = (value: string | undefined, range: DateRange) =
   const fromTime = parseDateValue(range.from);
   if (fromTime !== null && time < fromTime) return false;
 
-  const toTime = parseDateValue(range.to);
+  const toTimeRaw = parseDateValue(range.to);
+  const toTime = range.to && !range.to.includes('T') && toTimeRaw !== null
+    ? toTimeRaw + 24 * 60 * 60 * 1000 - 1
+    : toTimeRaw;
   if (toTime !== null && time > toTime) return false;
 
   return true;

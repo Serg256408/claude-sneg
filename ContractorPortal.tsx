@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { Order, OrderStatus, AssetType, Contractor, Bid, DriverAssignment, formatPrice, formatDateTime, generateId, PriceUnit, TripEvidence, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateAssignmentEarnings, isLoaderType, getShiftHours } from './types';
+import { Order, OrderStatus, AssetType, Contractor, Bid, DriverAssignment, formatPrice, formatDateTime, generateId, PriceUnit, TripEvidence, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateAssignmentEarnings, isLoaderType, getShiftHours, toLocalDateTimeInputValue } from './types';
 import DriverPortal from './DriverPortal';
 
 interface ContractorPortalProps {
@@ -31,7 +31,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'available' | 'direct' | 'active' | 'earnings' | 'driver' | 'history'>('available');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
-  const getDefaultArrivalTime = () => new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 16);
+  const getDefaultArrivalTime = () => toLocalDateTimeInputValue(new Date(Date.now() + 60 * 60 * 1000));
   const [bidForm, setBidForm] = useState({
     price: 0,
     assetType: AssetType.TRUCK,
@@ -1216,7 +1216,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                   type="datetime-local"
                   className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-3 text-sm outline-none focus:border-blue-500 text-white"
                   value={bidForm.estimatedArrival}
-                  min={new Date().toISOString().slice(0, 16)}
+                  min={toLocalDateTimeInputValue()}
                   onChange={e => setBidForm({ ...bidForm, estimatedArrival: e.target.value })}
                 />
                 <div className="text-[9px] text-slate-500 mt-2">Можно выбрать дату и время, включая завтра.</div>

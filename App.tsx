@@ -28,8 +28,9 @@ import {
   isOrderInDateRange,
   normalizeOrderStatus,
   calculateOrderTotals,
+  toLocalDateTimeInputValue,
   PaymentType,
-  // РќРѕРІС‹Рµ С‚РёРїС‹
+  // Новые типы
   UserRole,
   Lead,
   LeadStatus,
@@ -49,7 +50,7 @@ import {
   USER_ROLE_LABELS,
 } from './types';
 
-// Р Р°СЃС€РёСЂРµРЅРЅС‹Рµ СЂРѕР»Рё
+// Расширенные роли
 type Role = 'dispatcher' | 'customer' | 'contractor' | 'sales_manager' | 'estimator' | 'accountant' | 'admin';
 
 const ROLE_LABELS: Record<Role, string> = {
@@ -69,7 +70,7 @@ const LS_KEYS = {
   role: 'snowforce_role_v1',
   manager: 'snowforce_manager_v1',
   contractorId: 'snowforce_contractor_id_v1',
-  // РќРѕРІС‹Рµ РєР»СЋС‡Рё
+  // Новые ключи
   leads: 'snowforce_leads_v1',
   users: 'snowforce_users_v1',
   companies: 'snowforce_companies_v1',
@@ -92,46 +93,46 @@ function seedCustomers(): Customer[] {
   return [
     {
       id: 'cust-1',
-      name: 'РћРћРћ "РЎРќР•Р“РћРЎР•Р Р’РРЎ"',
+      name: 'ООО "СНЕГОСЕРВИС"',
       phone: '+7 (999) 111-22-33',
       email: 'dispatch@snegoservice.ru',
       inn: '7700000000',
-      paymentType: 'РќР°Р»РёС‡РЅС‹Рµ' as any,
-      address: 'РњРѕСЃРєРІР°, СѓР». РўРІРµСЂСЃРєР°СЏ, 1',
+      paymentType: 'Наличные' as any,
+      address: 'Москва, ул. Тверская, 1',
       comment: '',
       createdAt: now,
     },
     {
       id: 'cust-2',
-      name: 'РђРћ "Р“РѕСЂРѕРґРЎРЅРµРі"',
+      name: 'АО "ГородСнег"',
       phone: '+7 (999) 222-33-44',
       email: 'info@gorodsneg.ru',
       inn: '7700000002',
-      paymentType: 'Р‘РµР·РЅР°Р» Р±РµР· РќР”РЎ' as any,
-      address: 'РњРѕСЃРєРІР°, РїСЂ-С‚ РњРёСЂР°, 25',
-      comment: 'РўСЂРµР±СѓСЋС‚СЃСЏ РѕС‚С‡С‘С‚С‹ РїРѕ РєР°Р¶РґРѕРјСѓ СЂРµР№СЃСѓ.',
+      paymentType: 'Безнал без НДС' as any,
+      address: 'Москва, пр-т Мира, 25',
+      comment: 'Требуются отчёты по каждому рейсу.',
       createdAt: now,
     },
     {
       id: 'cust-3',
-      name: 'РРџ РћСЂР»РѕРІР°',
+      name: 'ИП Орлова',
       phone: '+7 (999) 333-44-55',
       email: 'orlova@example.com',
       inn: '7700000003',
-      paymentType: 'РЎ РќР”РЎ 20%' as any,
-      address: 'РњРѕСЃРєРІР°, Р›РµРЅРёРЅРіСЂР°РґСЃРєРёР№ РїСЂРѕСЃРїРµРєС‚, 10',
-      comment: 'Р Р°Р±РѕС‚С‹ С‚РѕР»СЊРєРѕ РґРЅС‘Рј.',
+      paymentType: 'С НДС 20%' as any,
+      address: 'Москва, Ленинградский проспект, 10',
+      comment: 'Работы только днём.',
       createdAt: now,
     },
     {
       id: 'cust-4',
-      name: 'РћРћРћ "РЎРЅРµРіРџСЂРѕС„Рё"',
+      name: 'ООО "СнегПрофи"',
       phone: '+7 (999) 444-55-66',
       email: 'office@snegprofi.ru',
       inn: '7700000006',
-      paymentType: 'РќР°Р»РёС‡РЅС‹Рµ' as any,
-      address: 'РњРѕСЃРєРІР°, СѓР». РќРѕРІРѕСЃР»РѕР±РѕРґСЃРєР°СЏ, 12',
-      comment: 'РЎСЂРѕС‡РЅС‹Рµ Р·Р°СЏРІРєРё РІ РІРµС‡РµСЂРЅРµРµ РІСЂРµРјСЏ.',
+      paymentType: 'Наличные' as any,
+      address: 'Москва, ул. Новослободская, 12',
+      comment: 'Срочные заявки в вечернее время.',
       createdAt: now,
     },
   ];
@@ -142,61 +143,61 @@ function seedContractors(): Contractor[] {
   return [
     {
       id: 'cont-1',
-      name: 'РРџ РџРµС‚СЂРѕРІ',
+      name: 'ИП Петров',
       phone: '+7 (999) 444-55-66',
       email: 'petrov@example.com',
       inn: '7700000001',
-      equipment: ['РЎР°РјРѕСЃРІР°Р»', 'РџРѕРіСЂСѓР·С‡РёРє'],
-      districts: ['Р¦РђРћ', 'РЎРђРћ', 'РЎР’РђРћ'],
-      paymentType: 'РќР°Р»РёС‡РЅС‹Рµ' as any,
+      equipment: ['Самосвал', 'Погрузчик'],
+      districts: ['ЦАО', 'САО', 'СВАО'],
+      paymentType: 'Наличные' as any,
       rating: 4.7,
       completedOrders: 42,
-      comments: 'Р Р°Р±РѕС‚Р°РµРј РєСЂСѓРіР»РѕСЃСѓС‚РѕС‡РЅРѕ.',
+      comments: 'Работаем круглосуточно.',
       isVerified: true,
       createdAt: now,
     },
     {
       id: 'cont-2',
-      name: 'РћРћРћ "РЎРЅРµРіРўСЂР°РЅСЃ"',
+      name: 'ООО "СнегТранс"',
       phone: '+7 (999) 555-66-77',
       email: 'dispatch@snegtrans.ru',
       inn: '7700000004',
-      equipment: ['РЎР°РјРѕСЃРІР°Р» 20Рј3', 'РЎР°РјРѕСЃРІР°Р» 15Рј3'],
-      districts: ['Р®РђРћ', 'Р®Р—РђРћ', 'Р—РђРћ'],
-      paymentType: 'Р‘РµР·РЅР°Р» Р±РµР· РќР”РЎ' as any,
+      equipment: ['Самосвал 20м3', 'Самосвал 15м3'],
+      districts: ['ЮАО', 'ЮЗАО', 'ЗАО'],
+      paymentType: 'Безнал без НДС' as any,
       rating: 4.2,
       completedOrders: 18,
-      comments: 'РўРµС…РЅРёРєР° 2022 РіРѕРґР°.',
+      comments: 'Техника 2022 года.',
       isVerified: false,
       createdAt: now,
     },
     {
       id: 'cont-3',
-      name: 'РРџ РЎРёРґРѕСЂРѕРІ',
+      name: 'ИП Сидоров',
       phone: '+7 (999) 777-88-99',
       email: 'sidorov@example.com',
       inn: '7700000005',
-      equipment: ['РџРѕРіСЂСѓР·С‡РёРє', 'РњРёРЅРё-РїРѕРіСЂСѓР·С‡РёРє'],
-      districts: ['РЎР—РђРћ', 'РЎРђРћ'],
-      paymentType: 'РЎ РќР”РЎ 20%' as any,
+      equipment: ['Погрузчик', 'Мини-погрузчик'],
+      districts: ['СЗАО', 'САО'],
+      paymentType: 'С НДС 20%' as any,
       rating: 4.9,
       completedOrders: 56,
-      comments: 'РЎРјРµРЅС‹ РѕС‚ 6 С‡Р°СЃРѕРІ.',
+      comments: 'Смены от 6 часов.',
       isVerified: true,
       createdAt: now,
     },
     {
       id: 'cont-4',
-      name: 'РћРћРћ "РЎРµРІРµСЂРўРµС…"',
+      name: 'ООО "СеверТех"',
       phone: '+7 (999) 888-99-00',
       email: 'ops@severtech.ru',
       inn: '7700000007',
-      equipment: ['РЎР°РјРѕСЃРІР°Р» 25Рј3', 'РџРѕРіСЂСѓР·С‡РёРє'],
-      districts: ['Р’РђРћ', 'Р®Р’РђРћ', 'Р¦РђРћ'],
-      paymentType: 'Р‘РµР·РЅР°Р» Р±РµР· РќР”РЎ' as any,
+      equipment: ['Самосвал 25м3', 'Погрузчик'],
+      districts: ['ВАО', 'ЮВАО', 'ЦАО'],
+      paymentType: 'Безнал без НДС' as any,
       rating: 4.4,
       completedOrders: 27,
-      comments: 'Р Р°Р±РѕС‚Р°РµРј РїРѕ РґРѕРіРѕРІРѕСЂСѓ, РјРёРЅРёРјСѓРј 5 СЃРјРµРЅ.',
+      comments: 'Работаем по договору, минимум 5 смен.',
       isVerified: true,
       createdAt: now,
     },
@@ -241,34 +242,46 @@ function normalizeContractor(raw: Partial<Contractor>): Contractor {
   };
 }
 
-// Seed РґР°РЅРЅС‹Рµ РґР»СЏ Р»РёРґРѕРІ
+function normalizeOrderDates(order: Order): Order {
+  const createdAt = order.createdAt || new Date().toISOString();
+  const updatedAt = order.updatedAt || createdAt;
+  const scheduledTime = order.scheduledTime || toLocalDateTimeInputValue(new Date(createdAt));
+  return {
+    ...order,
+    createdAt,
+    updatedAt,
+    scheduledTime
+  };
+}
+
+// Seed данные для лидов
 function seedLeads(): Lead[] {
   const now = new Date().toISOString();
   return [
     {
       id: 'lead-1',
       source: 'phone',
-      customerName: 'РћРћРћ "РќРѕРІС‹Р№РљР»РёРµРЅС‚"',
+      customerName: 'ООО "НовыйКлиент"',
       customerPhone: '+7 (999) 000-11-22',
       customerEmail: 'new@client.ru',
-      address: 'РњРѕСЃРєРІР°, СѓР». РќРѕРІР°СЏ, 10',
+      address: 'Москва, ул. Новая, 10',
       serviceType: ServiceType.SNOW,
-      description: 'РќСѓР¶РµРЅ РІС‹РІРѕР· СЃРЅРµРіР° СЃРѕ РґРІРѕСЂР°, РїСЂРёРјРµСЂРЅРѕ 100РјВі',
+      description: 'Нужен вывоз снега со двора, примерно 100м³',
       snowVolumeM3: 100,
       urgency: 'normal',
       assignedManagerId: 'manager-1',
-      assignedManagerName: 'РђР›Р•РљРЎРђРќР”Р ',
+      assignedManagerName: 'АЛЕКСАНДР',
       status: LeadStatus.NEW,
       createdAt: now,
     },
     {
       id: 'lead-2',
       source: 'website',
-      customerName: 'РРџ РЎРµСЂРіРµРµРІ',
+      customerName: 'ИП Сергеев',
       customerPhone: '+7 (999) 111-22-33',
-      address: 'РњРѕСЃРєРІР°, РїСЂ-С‚ Р’РµСЂРЅР°РґСЃРєРѕРіРѕ, 50',
+      address: 'Москва, пр-т Вернадского, 50',
       serviceType: ServiceType.ASPHALT,
-      description: 'РђСЃС„Р°Р»СЊС‚РёСЂРѕРІР°РЅРёРµ РїР°СЂРєРѕРІРєРё 500РјВІ',
+      description: 'Асфальтирование парковки 500м²',
       asphaltAreaM2: 500,
       asphaltType: 'parking',
       urgency: 'urgent',
@@ -278,30 +291,30 @@ function seedLeads(): Lead[] {
   ];
 }
 
-// Seed РґР°РЅРЅС‹Рµ РґР»СЏ РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№
+// Seed данные для пользователей
 function seedUsers(): User[] {
   const now = new Date().toISOString();
   return [
-    { id: 'manager-1', role: UserRole.SALES_MANAGER, phone: '+7 (999) 100-00-01', name: 'РђР›Р•РљРЎРђРќР”Р ', status: 'active', createdAt: now },
-    { id: 'manager-2', role: UserRole.SALES_MANAGER, phone: '+7 (999) 100-00-02', name: 'Р”РњРРўР РР™', status: 'active', createdAt: now },
-    { id: 'manager-3', role: UserRole.SALES_MANAGER, phone: '+7 (999) 100-00-03', name: 'Р•РљРђРўР•Р РРќРђ', status: 'active', createdAt: now },
-    { id: 'estimator-1', role: UserRole.ESTIMATOR, phone: '+7 (999) 200-00-01', name: 'РРІР°РЅ РЎРјРµС‚С‡РёРєРѕРІ', status: 'active', createdAt: now },
-    { id: 'dispatcher-1', role: UserRole.DISPATCHER, phone: '+7 (999) 300-00-01', name: 'Р”РёСЃРїРµС‚С‡РµСЂ 1', status: 'active', createdAt: now },
-    { id: 'accountant-1', role: UserRole.ACCOUNTANT, phone: '+7 (999) 400-00-01', name: 'РњР°СЂРёСЏ Р‘СѓС…РіР°Р»С‚РµСЂРѕРІР°', status: 'active', createdAt: now },
-    { id: 'admin-1', role: UserRole.ADMIN, phone: '+7 (999) 500-00-01', name: 'РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ', status: 'active', createdAt: now },
+    { id: 'manager-1', role: UserRole.SALES_MANAGER, phone: '+7 (999) 100-00-01', name: 'АЛЕКСАНДР', status: 'active', createdAt: now },
+    { id: 'manager-2', role: UserRole.SALES_MANAGER, phone: '+7 (999) 100-00-02', name: 'ДМИТРИЙ', status: 'active', createdAt: now },
+    { id: 'manager-3', role: UserRole.SALES_MANAGER, phone: '+7 (999) 100-00-03', name: 'ЕКАТЕРИНА', status: 'active', createdAt: now },
+    { id: 'estimator-1', role: UserRole.ESTIMATOR, phone: '+7 (999) 200-00-01', name: 'Иван Сметчиков', status: 'active', createdAt: now },
+    { id: 'dispatcher-1', role: UserRole.DISPATCHER, phone: '+7 (999) 300-00-01', name: 'Диспетчер 1', status: 'active', createdAt: now },
+    { id: 'accountant-1', role: UserRole.ACCOUNTANT, phone: '+7 (999) 400-00-01', name: 'Мария Бухгалтерова', status: 'active', createdAt: now },
+    { id: 'admin-1', role: UserRole.ADMIN, phone: '+7 (999) 500-00-01', name: 'Администратор', status: 'active', createdAt: now },
   ];
 }
 
-// Seed РґР°РЅРЅС‹Рµ РґР»СЏ РєРѕРјРїР°РЅРёР№
+// Seed данные для компаний
 function seedCompanies(): Company[] {
   const now = new Date().toISOString();
   return [
     {
       id: 'company-transkom',
       type: CompanyType.TRANSKOM,
-      name: 'РћРћРћ "РўСЂР°РЅСЃРєРѕРј"',
+      name: 'ООО "Транском"',
       inn: '7700000100',
-      legalAddress: 'РњРѕСЃРєРІР°, СѓР». Р¦РµРЅС‚СЂР°Р»СЊРЅР°СЏ, 1',
+      legalAddress: 'Москва, ул. Центральная, 1',
       phone: '+7 (495) 123-45-67',
       defaultPaymentType: PaymentType.VAT_20,
       isVerified: true,
@@ -310,32 +323,33 @@ function seedCompanies(): Company[] {
   ];
 }
 
-// Seed РґР°РЅРЅС‹Рµ РґР»СЏ РїСЂР°Р№СЃ-Р»РёСЃС‚Р°
+// Seed данные для прайс-листа
 function seedPriceBook(): PriceBookItem[] {
   const now = new Date().toISOString();
   return [
-    { id: 'p1', workTypeId: 'snow_trip_20', workTypeName: 'Р’С‹РІРѕР· СЃРЅРµРіР° (СЃР°РјРѕСЃРІР°Р» 20РјВі)', serviceType: ServiceType.SNOW, unit: 'trip', unitLabel: 'СЂРµР№СЃ', baseCustomerPrice: 3500, baseCostPrice: 2800, isActive: true, createdAt: now },
-    { id: 'p2', workTypeId: 'snow_trip_25', workTypeName: 'Р’С‹РІРѕР· СЃРЅРµРіР° (СЃР°РјРѕСЃРІР°Р» 25РјВі)', serviceType: ServiceType.SNOW, unit: 'trip', unitLabel: 'СЂРµР№СЃ', baseCustomerPrice: 4200, baseCostPrice: 3400, isActive: true, createdAt: now },
-    { id: 'p3', workTypeId: 'loader_shift', workTypeName: 'РџРѕРіСЂСѓР·С‡РёРє JCB (СЃРјРµРЅР°)', serviceType: ServiceType.SNOW, unit: 'shift', unitLabel: 'СЃРјРµРЅР°', baseCustomerPrice: 15000, baseCostPrice: 12000, isActive: true, createdAt: now },
-    { id: 'p4', workTypeId: 'loader_hour', workTypeName: 'РџРѕРіСЂСѓР·С‡РёРє JCB (С‡Р°СЃ)', serviceType: ServiceType.SNOW, unit: 'hour', unitLabel: 'С‡Р°СЃ', baseCustomerPrice: 2500, baseCostPrice: 2000, isActive: true, createdAt: now },
-    { id: 'p5', workTypeId: 'asphalt_m2', workTypeName: 'РђСЃС„Р°Р»СЊС‚РёСЂРѕРІР°РЅРёРµ (1 СЃР»РѕР№)', serviceType: ServiceType.ASPHALT, unit: 'm2', unitLabel: 'РјВІ', baseCustomerPrice: 450, baseCostPrice: 350, isActive: true, createdAt: now },
-    { id: 'p6', workTypeId: 'asphalt_m2_2', workTypeName: 'РђСЃС„Р°Р»СЊС‚РёСЂРѕРІР°РЅРёРµ (2 СЃР»РѕСЏ)', serviceType: ServiceType.ASPHALT, unit: 'm2', unitLabel: 'РјВІ', baseCustomerPrice: 850, baseCostPrice: 680, isActive: true, createdAt: now },
-    { id: 'p7', workTypeId: 'curb_m', workTypeName: 'Р‘РѕСЂРґСЋСЂ РґРѕСЂРѕР¶РЅС‹Р№', serviceType: ServiceType.ASPHALT, unit: 'running_meter', unitLabel: 'Рї.Рј.', baseCustomerPrice: 1200, baseCostPrice: 900, isActive: true, createdAt: now },
+    { id: 'p1', workTypeId: 'snow_trip_20', workTypeName: 'Вывоз снега (самосвал 20м³)', serviceType: ServiceType.SNOW, unit: 'trip', unitLabel: 'рейс', baseCustomerPrice: 3500, baseCostPrice: 2800, isActive: true, createdAt: now },
+    { id: 'p2', workTypeId: 'snow_trip_25', workTypeName: 'Вывоз снега (самосвал 25м³)', serviceType: ServiceType.SNOW, unit: 'trip', unitLabel: 'рейс', baseCustomerPrice: 4200, baseCostPrice: 3400, isActive: true, createdAt: now },
+    { id: 'p3', workTypeId: 'loader_shift', workTypeName: 'Погрузчик JCB (смена)', serviceType: ServiceType.SNOW, unit: 'shift', unitLabel: 'смена', baseCustomerPrice: 15000, baseCostPrice: 12000, isActive: true, createdAt: now },
+    { id: 'p4', workTypeId: 'loader_hour', workTypeName: 'Погрузчик JCB (час)', serviceType: ServiceType.SNOW, unit: 'hour', unitLabel: 'час', baseCustomerPrice: 2500, baseCostPrice: 2000, isActive: true, createdAt: now },
+    { id: 'p5', workTypeId: 'asphalt_m2', workTypeName: 'Асфальтирование (1 слой)', serviceType: ServiceType.ASPHALT, unit: 'm2', unitLabel: 'м²', baseCustomerPrice: 450, baseCostPrice: 350, isActive: true, createdAt: now },
+    { id: 'p6', workTypeId: 'asphalt_m2_2', workTypeName: 'Асфальтирование (2 слоя)', serviceType: ServiceType.ASPHALT, unit: 'm2', unitLabel: 'м²', baseCustomerPrice: 850, baseCostPrice: 680, isActive: true, createdAt: now },
+    { id: 'p7', workTypeId: 'curb_m', workTypeName: 'Бордюр дорожный', serviceType: ServiceType.ASPHALT, unit: 'running_meter', unitLabel: 'п.м.', baseCustomerPrice: 1200, baseCostPrice: 900, isActive: true, createdAt: now },
   ];
 }
 
-// Seed РґР°РЅРЅС‹Рµ РґР»СЏ С‚РµС…РЅРёРєРё
+// Seed данные для техники
 function seedVehicles(): Vehicle[] {
   const now = new Date().toISOString();
   return [
-    { id: 'v1', ownerCompanyId: 'company-transkom', ownerCompanyName: 'РўСЂР°РЅСЃРєРѕРј', ownerType: 'transkom', type: AssetType.TRUCK_20, plateNumber: 'Рђ001РђРђ77', capacityM3: 20, gpsEnabled: true, status: 'available', createdAt: now },
-    { id: 'v2', ownerCompanyId: 'company-transkom', ownerCompanyName: 'РўСЂР°РЅСЃРєРѕРј', ownerType: 'transkom', type: AssetType.TRUCK_25, plateNumber: 'Рђ002РђРђ77', capacityM3: 25, gpsEnabled: true, status: 'available', createdAt: now },
-    { id: 'v3', ownerCompanyId: 'company-transkom', ownerCompanyName: 'РўСЂР°РЅСЃРєРѕРј', ownerType: 'transkom', type: AssetType.LOADER_JCB, plateNumber: 'Рђ003РђРђ77', gpsEnabled: true, status: 'available', createdAt: now },
+    { id: 'v1', ownerCompanyId: 'company-transkom', ownerCompanyName: 'Транском', ownerType: 'transkom', type: AssetType.TRUCK_20, plateNumber: 'А001АА77', capacityM3: 20, gpsEnabled: true, status: 'available', createdAt: now },
+    { id: 'v2', ownerCompanyId: 'company-transkom', ownerCompanyName: 'Транском', ownerType: 'transkom', type: AssetType.TRUCK_25, plateNumber: 'А002АА77', capacityM3: 25, gpsEnabled: true, status: 'available', createdAt: now },
+    { id: 'v3', ownerCompanyId: 'company-transkom', ownerCompanyName: 'Транском', ownerType: 'transkom', type: AssetType.LOADER_JCB, plateNumber: 'А003АА77', gpsEnabled: true, status: 'available', createdAt: now },
   ];
 }
 
 function seedOrders(customers: Customer[]): Order[] {
   const now = new Date().toISOString();
+  const nowLocal = toLocalDateTimeInputValue();
   const getCustomer = (index: number) => customers[index] || customers[0];
   const customerOne = getCustomer(0);
   const customerTwo = getCustomer(1);
@@ -344,11 +358,11 @@ function seedOrders(customers: Customer[]): Order[] {
     {
       id: 'ord-1',
       orderNumber: generateOrderNumber(),
-      customer: customerOne?.name ?? 'РљР»РёРµРЅС‚',
+      customer: customerOne?.name ?? 'Клиент',
       customerId: customerOne?.id,
-      contactInfo: { name: customerOne?.name ?? 'РљР»РёРµРЅС‚', phone: customerOne?.phone ?? '' },
-      address: 'РњРѕСЃРєРІР°, СѓР». РўРІРµСЂСЃРєР°СЏ, 1',
-      district: 'Р¦РђРћ',
+      contactInfo: { name: customerOne?.name ?? 'Клиент', phone: customerOne?.phone ?? '' },
+      address: 'Москва, ул. Тверская, 1',
+      district: 'ЦАО',
       coordinates: [55.7558, 37.6173],
       assetRequirements: [
         {
@@ -359,7 +373,7 @@ function seedOrders(customers: Customer[]): Order[] {
           plannedUnits: 2,
           customerPrice: 3500,
           contractorPrice: 2800,
-          priceUnit: 'Р—Р° СЂРµР№СЃ' as any,
+          priceUnit: 'За рейс' as any,
           minimalCharge: 0,
           deliveryCharge: 0,
         },
@@ -374,7 +388,7 @@ function seedOrders(customers: Customer[]): Order[] {
       actualTrips: 0,
       evidences: [],
       isPaid: false,
-      scheduledTime: now.slice(0, 16),
+      scheduledTime: nowLocal,
       status: OrderStatus.NEW_REQUEST,
       managerName: DEFAULT_MANAGERS[0],
       createdAt: now,
@@ -382,7 +396,7 @@ function seedOrders(customers: Customer[]): Order[] {
       actionLog: [],
       messages: [],
       unreadMessages: 0,
-      // РќРѕРІС‹Рµ РїРѕР»СЏ
+      // Новые поля
       serviceType: ServiceType.SNOW,
       executionMode: ExecutionMode.MARKETPLACE,
       snowVolumeM3: 200,
@@ -390,22 +404,22 @@ function seedOrders(customers: Customer[]): Order[] {
     {
       id: 'ord-2',
       orderNumber: generateOrderNumber(),
-      customer: customerTwo?.name ?? 'РљР»РёРµРЅС‚',
+      customer: customerTwo?.name ?? 'Клиент',
       customerId: customerTwo?.id,
-      contactInfo: { name: customerTwo?.name ?? 'РљР»РёРµРЅС‚', phone: customerTwo?.phone ?? '' },
-      address: 'РњРѕСЃРєРІР°, РїСЂ-С‚ РњРёСЂР°, 25',
-      district: 'РЎР’РђРћ',
+      contactInfo: { name: customerTwo?.name ?? 'Клиент', phone: customerTwo?.phone ?? '' },
+      address: 'Москва, пр-т Мира, 25',
+      district: 'СВАО',
       coordinates: [55.7812, 37.6341],
       assetRequirements: [
         {
           id: generateId(),
           type: AssetType.TRUCK,
           contractorId: 'cont-2',
-          contractorName: 'РћРћРћ "РЎРЅРµРіРўСЂР°РЅСЃ"',
+          contractorName: 'ООО "СнегТранс"',
           plannedUnits: 1,
           customerPrice: 4200,
           contractorPrice: 3400,
-          priceUnit: 'Р—Р° СЂРµР№СЃ' as any,
+          priceUnit: 'За рейс' as any,
           minimalCharge: 0,
           deliveryCharge: 0,
         },
@@ -420,7 +434,7 @@ function seedOrders(customers: Customer[]): Order[] {
       actualTrips: 0,
       evidences: [],
       isPaid: false,
-      scheduledTime: now.slice(0, 16),
+      scheduledTime: nowLocal,
       status: OrderStatus.SEARCHING_EQUIPMENT,
       managerName: DEFAULT_MANAGERS[1],
       createdAt: now,
@@ -428,7 +442,7 @@ function seedOrders(customers: Customer[]): Order[] {
       actionLog: [],
       messages: [],
       unreadMessages: 0,
-      // РќРѕРІС‹Рµ РїРѕР»СЏ
+      // Новые поля
       serviceType: ServiceType.SNOW,
       executionMode: ExecutionMode.OWN_FLEET,
       snowVolumeM3: 120,
@@ -436,22 +450,22 @@ function seedOrders(customers: Customer[]): Order[] {
     {
       id: 'ord-3',
       orderNumber: generateOrderNumber(),
-      customer: customerThree?.name ?? 'РљР»РёРµРЅС‚',
+      customer: customerThree?.name ?? 'Клиент',
       customerId: customerThree?.id,
-      contactInfo: { name: customerThree?.name ?? 'РљР»РёРµРЅС‚', phone: customerThree?.phone ?? '' },
-      address: 'РњРѕСЃРєРІР°, Р›РµРЅРёРЅРіСЂР°РґСЃРєРёР№ РїСЂРѕСЃРїРµРєС‚, 10',
-      district: 'РЎРђРћ',
+      contactInfo: { name: customerThree?.name ?? 'Клиент', phone: customerThree?.phone ?? '' },
+      address: 'Москва, Ленинградский проспект, 10',
+      district: 'САО',
       coordinates: [55.7815, 37.5777],
       assetRequirements: [
         {
           id: generateId(),
           type: AssetType.LOADER,
           contractorId: 'cont-3',
-          contractorName: 'РРџ РЎРёРґРѕСЂРѕРІ',
+          contractorName: 'ИП Сидоров',
           plannedUnits: 1,
           customerPrice: 15000,
           contractorPrice: 12000,
-          priceUnit: 'Р—Р° СЃРјРµРЅСѓ' as any,
+          priceUnit: 'За смену' as any,
           minimalCharge: 0,
           deliveryCharge: 0,
         },
@@ -463,7 +477,7 @@ function seedOrders(customers: Customer[]): Order[] {
           plannedUnits: 1,
           customerPrice: 3800,
           contractorPrice: 3000,
-          priceUnit: 'Р—Р° СЂРµР№СЃ' as any,
+          priceUnit: 'За рейс' as any,
           minimalCharge: 0,
           deliveryCharge: 0,
         },
@@ -478,7 +492,7 @@ function seedOrders(customers: Customer[]): Order[] {
       actualTrips: 0,
       evidences: [],
       isPaid: false,
-      scheduledTime: now.slice(0, 16),
+      scheduledTime: nowLocal,
       status: OrderStatus.NEW_REQUEST,
       managerName: DEFAULT_MANAGERS[2],
       createdAt: now,
@@ -486,7 +500,7 @@ function seedOrders(customers: Customer[]): Order[] {
       actionLog: [],
       messages: [],
       unreadMessages: 0,
-      // РќРѕРІС‹Рµ РїРѕР»СЏ
+      // Новые поля
       serviceType: ServiceType.SNOW,
       executionMode: ExecutionMode.MARKETPLACE,
       snowVolumeM3: 160,
@@ -561,9 +575,11 @@ export default function App() {
   const [contractors, setContractors] = useState<Contractor[]>(() =>
     safeJsonParse(localStorage.getItem(LS_KEYS.contractors), seedContractors()).map(normalizeContractor)
   );
-  const [orders, setOrders] = useState<Order[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.orders), seedOrders(seedCustomers())));
+  const [orders, setOrders] = useState<Order[]>(() =>
+    safeJsonParse(localStorage.getItem(LS_KEYS.orders), seedOrders(seedCustomers())).map(normalizeOrderDates)
+  );
 
-  // РќРѕРІС‹Рµ СЃРѕСЃС‚РѕСЏРЅРёСЏ
+  // Новые состояния
   const [leads, setLeads] = useState<Lead[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.leads), seedLeads()));
   const [users, setUsers] = useState<User[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.users), seedUsers()));
   const [companies, setCompanies] = useState<Company[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.companies), seedCompanies()));
@@ -598,7 +614,7 @@ export default function App() {
   useEffect(() => localStorage.setItem(LS_KEYS.customers, JSON.stringify(customers)), [customers]);
   useEffect(() => localStorage.setItem(LS_KEYS.contractors, JSON.stringify(contractors)), [contractors]);
   useEffect(() => localStorage.setItem(LS_KEYS.orders, JSON.stringify(orders)), [orders]);
-  // РЎРѕС…СЂР°РЅРµРЅРёРµ РЅРѕРІС‹С… СЃРѕСЃС‚РѕСЏРЅРёР№
+  // Сохранение новых состояний
   useEffect(() => localStorage.setItem(LS_KEYS.leads, JSON.stringify(leads)), [leads]);
   useEffect(() => localStorage.setItem(LS_KEYS.users, JSON.stringify(users)), [users]);
   useEffect(() => localStorage.setItem(LS_KEYS.companies, JSON.stringify(companies)), [companies]);
@@ -708,7 +724,7 @@ export default function App() {
         isPaid: partial.isPaid ?? false,
         totalCustomerPrice: partial.totalCustomerPrice,
         totalContractorPrice: partial.totalContractorPrice,
-        scheduledTime: partial.scheduledTime || now.slice(0, 16),
+        scheduledTime: partial.scheduledTime || toLocalDateTimeInputValue(),
         startedAt: partial.startedAt,
         completedAt: partial.completedAt,
         status: (partial.status as OrderStatus) || OrderStatus.NEW_REQUEST,
@@ -754,7 +770,7 @@ export default function App() {
       if (editingOrder?.id) {
         updateOrder(editingOrder.id, dataWithTotals);
         if (keepOpen) {
-          // РћР±РЅРѕРІР»СЏРµРј editingOrder, С‡С‚РѕР±С‹ С„РѕСЂРјР° РїРѕРєР°Р·С‹РІР°Р»Р° Р°РєС‚СѓР°Р»СЊРЅС‹Рµ РґР°РЅРЅС‹Рµ
+          // Обновляем editingOrder, чтобы форма показывала актуальные данные
           setEditingOrder(prev => prev ? { ...prev, ...dataWithTotals } as Order : undefined);
           return;
         }
@@ -851,7 +867,7 @@ export default function App() {
 
   const acceptJob = useCallback((orderId: string, contractorId: string, assetType: AssetType) => {
     const contractor = contractors.find(c => c.id === contractorId);
-    const driverDisplayName = contractor?.name || 'Р’РћР”РРўР•Р›Р¬';
+    const driverDisplayName = contractor?.name || 'ВОДИТЕЛЬ';
     const assignment: DriverAssignment = {
       id: generateId(),
       orderId,
@@ -862,7 +878,7 @@ export default function App() {
       assetType,
       vehicleNumber: '',
       assignedPrice: 0,
-      priceUnit: 'Р—Р° СЂРµР№СЃ' as any,
+      priceUnit: 'За рейс' as any,
       assignedAt: new Date().toISOString(),
       assignedBy: 'SYSTEM',
       status: 'assigned',
@@ -904,7 +920,7 @@ export default function App() {
     );
   }, []);
 
-  // === РќРѕРІС‹Рµ callbacks РґР»СЏ СЂР°СЃС€РёСЂРµРЅРЅРѕРіРѕ С„СѓРЅРєС†РёРѕРЅР°Р»Р° ===
+  // === Новые callbacks для расширенного функционала ===
 
   // Р›РёРґС‹
   const addLead = useCallback((lead: Lead) => {
@@ -939,7 +955,7 @@ export default function App() {
       actualTrips: 0,
       evidences: [],
       isPaid: false,
-      scheduledTime: now.slice(0, 16),
+      scheduledTime: nowLocal,
       status: OrderStatus.NEW_REQUEST,
       managerName: lead.assignedManagerName || currentManager,
       managerId: lead.assignedManagerId,
@@ -960,7 +976,7 @@ export default function App() {
     setOrders(prev => [newOrder, ...prev]);
   }, [currentManager]);
 
-  // РЎРјРµС‚С‹
+  // Сметы
   const saveEstimate = useCallback((orderId: string, estimate: Estimate) => {
     setOrders(prev => prev.map(o => o.id === orderId ? {
       ...o,
@@ -973,7 +989,7 @@ export default function App() {
     } : o));
   }, []);
 
-  // РЎС‡РµС‚Р°
+  // Счета
   const createInvoice = useCallback((orderId: string, invoice: Invoice) => {
     setOrders(prev => prev.map(o => o.id === orderId ? {
       ...o,
@@ -983,7 +999,7 @@ export default function App() {
     } : o));
   }, []);
 
-  // РџР»Р°С‚РµР¶Рё
+  // Платежи
   const recordPayment = useCallback((orderId: string, payment: Payment) => {
     setOrders(prev => prev.map(o => o.id === orderId ? {
       ...o,
@@ -992,7 +1008,7 @@ export default function App() {
     } : o));
   }, []);
 
-  // Р”РѕРіРѕРІРѕСЂС‹
+  // Договоры
   const createContract = useCallback((orderId: string, contract: Contract) => {
     setOrders(prev => prev.map(o => o.id === orderId ? {
       ...o,
@@ -1002,7 +1018,7 @@ export default function App() {
     } : o));
   }, []);
 
-  // Р—Р°РєСЂС‹РІР°СЋС‰РёРµ РґРѕРєСѓРјРµРЅС‚С‹
+  // Закрывающие документы
   const createClosingDocs = useCallback((orderId: string, docs: ClosingDocs) => {
     setOrders(prev => prev.map(o => o.id === orderId ? {
       ...o,
@@ -1011,7 +1027,7 @@ export default function App() {
     } : o));
   }, []);
 
-  // РџРѕР»СЊР·РѕРІР°С‚РµР»Рё
+  // Пользователи
   const addUser = useCallback((user: User) => {
     setUsers(prev => [user, ...prev]);
   }, []);
@@ -1020,7 +1036,7 @@ export default function App() {
     setUsers(prev => prev.map(u => u.id === userId ? { ...u, ...updates } : u));
   }, []);
 
-  // РљРѕРјРїР°РЅРёРё
+  // Компании
   const addCompany = useCallback((company: Company) => {
     setCompanies(prev => [company, ...prev]);
   }, []);
@@ -1029,7 +1045,7 @@ export default function App() {
     setCompanies(prev => prev.map(c => c.id === companyId ? { ...c, ...updates } : c));
   }, []);
 
-  // РџСЂР°Р№СЃ-Р»РёСЃС‚
+  // Прайс-лист
   const addPriceItem = useCallback((item: PriceBookItem) => {
     setPriceBook(prev => [item, ...prev]);
   }, []);
@@ -1042,7 +1058,7 @@ export default function App() {
     setPriceBook(prev => prev.filter(p => p.id !== itemId));
   }, []);
 
-  // РўРµС…РЅРёРєР°
+  // Техника
   const addVehicle = useCallback((vehicle: Vehicle) => {
     setVehicles(prev => [vehicle, ...prev]);
   }, []);
@@ -1051,7 +1067,7 @@ export default function App() {
     setVehicles(prev => prev.map(v => v.id === vehicleId ? { ...v, ...updates } : v));
   }, []);
 
-  // РћР±РЅРѕРІР»РµРЅРёРµ РґР°РЅРЅС‹С… РЅР°Р·РЅР°С‡РµРЅРёСЏ РІРѕРґРёС‚РµР»СЏ (РЅР°РїСЂРёРјРµСЂ, РІСЂРµРјСЏ СЃРјРµРЅС‹ РїРѕРіСЂСѓР·С‡РёРєР°)
+  // Обновление данных назначения водителя (например, время смены погрузчика)
   const updateDriverAssignment = useCallback((orderId: string, driverAssignmentId: string, updates: Partial<DriverAssignment>) => {
     setOrders(prev =>
       prev.map(o => {
@@ -1271,7 +1287,7 @@ export default function App() {
                   <div className="flex flex-col gap-1">
                     <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">С</span>
                     <input
-                      type="datetime-local"
+                      type="date"
                       value={dateFrom}
                       onChange={e => setDateFrom(e.target.value)}
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold"
@@ -1280,7 +1296,7 @@ export default function App() {
                   <div className="flex flex-col gap-1">
                     <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">По</span>
                     <input
-                      type="datetime-local"
+                      type="date"
                       value={dateTo}
                       onChange={e => setDateTo(e.target.value)}
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold"
@@ -1338,10 +1354,10 @@ export default function App() {
                   <thead className="text-left text-slate-400 uppercase text-[10px] tracking-widest font-black">
                     <tr>
                       <th className="py-2 pr-4">№</th>
-                      <th className="py-2 pr-4">РљР»РёРµРЅС‚</th>
-                      <th className="py-2 pr-4">РђРґСЂРµСЃ</th>
-                      <th className="py-2 pr-4">РЎС‚Р°С‚СѓСЃ</th>
-                      <th className="py-2 pr-4">Р”РµР№СЃС‚РІРёСЏ</th>
+                      <th className="py-2 pr-4">Клиент</th>
+                      <th className="py-2 pr-4">Адрес</th>
+                      <th className="py-2 pr-4">Статус</th>
+                      <th className="py-2 pr-4">Действия</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -1628,7 +1644,7 @@ export default function App() {
             onSubmitBid={submitBid}
             onWithdrawBid={withdrawBid}
             onUpdateContractor={onUpdateContractor}
-            driverName={contractors.find(c => c.id === currentContractorId)?.name || 'Р’РћР”РРўР•Р›Р¬'}
+            driverName={contractors.find(c => c.id === currentContractorId)?.name || 'ВОДИТЕЛЬ'}
             onReportTrip={reportTrip}
             onAcceptJob={acceptJob}
             onFinishWork={finishWork}
@@ -1636,7 +1652,7 @@ export default function App() {
           />
         )}
 
-        {/* РќРѕРІС‹Рµ РїРѕСЂС‚Р°Р»С‹ */}
+        {/* Новые порталы */}
         {role === 'sales_manager' && (
           <SalesManagerPortal
             leads={leads}
@@ -1657,7 +1673,7 @@ export default function App() {
             orders={orders}
             priceBook={priceBook}
             currentEstimatorId="estimator-1"
-            currentEstimatorName="РЎРјРµС‚С‡РёРє"
+            currentEstimatorName="Сметчик"
             onUpdateOrder={updateOrder}
             onSaveEstimate={saveEstimate}
           />
@@ -1672,7 +1688,7 @@ export default function App() {
             onRecordPayment={recordPayment}
             onCreateClosingDocs={createClosingDocs}
             currentUserId="accountant-1"
-            currentUserName="Р‘СѓС…РіР°Р»С‚РµСЂ"
+            currentUserName="Бухгалтер"
           />
         )}
 

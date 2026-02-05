@@ -13,14 +13,14 @@ const MapDashboard: React.FC<MapDashboardProps> = ({
 }) => {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  // Р¦РµРЅС‚СЂРёСЂСѓРµРј РєР°СЂС‚Сѓ РїРѕ РњРѕСЃРєРІРµ (РїСЂРёРјРµСЂРЅС‹Рµ РєРѕРѕСЂРґРёРЅР°С‚С‹)
+  // Центрируем карту по Москве (примерные координаты)
   const mapCenter = { lat: 55.7512, lng: 37.6184 };
-  const scale = 2000; // РњРЅРѕР¶РёС‚РµР»СЊ РґР»СЏ РїРµСЂРµРІРѕРґР° РєРѕРѕСЂРґРёРЅР°С‚ РІ РїРёРєСЃРµР»Рё
+  const scale = 2000; // Множитель для перевода координат в пиксели
 
   const projectToMap = (lat: number, lng: number) => {
     return {
-      x: (lng - mapCenter.lng) * scale + 500, // 500 - С†РµРЅС‚СЂ SVG
-      y: (mapCenter.lat - lat) * scale + 400  // 400 - С†РµРЅС‚СЂ SVG
+      x: (lng - mapCenter.lng) * scale + 500, // 500 - центр SVG
+      y: (mapCenter.lat - lat) * scale + 400  // 400 - центр SVG
     };
   };
 

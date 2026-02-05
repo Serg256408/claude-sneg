@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Order, OrderStatus, ManagerName, Contractor, AssetRequirement, AssetType, Customer, Bid, Quote, ActionLog, formatPrice, formatDateTime, generateId, PriceUnit, FULL_ORDER_STATUS_FLOW, getOrderStatusLabel, getNormalizedStatusLabel, normalizeOrderStatus, calculateOrderTotals, isTruckType, isLoaderType } from './types';
+import { Order, OrderStatus, ManagerName, Contractor, AssetRequirement, AssetType, Customer, Bid, Quote, ActionLog, formatPrice, formatDateTime, generateId, PriceUnit, FULL_ORDER_STATUS_FLOW, getOrderStatusLabel, getNormalizedStatusLabel, normalizeOrderStatus, calculateOrderTotals, isTruckType, isLoaderType, toLocalDateTimeInputValue } from './types';
 
 interface OrderFormProps {
   initialData?: Order;
@@ -28,7 +28,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
     address: '',
     assetRequirements: [],
     plannedTrips: 10,
-    scheduledTime: new Date().toISOString().slice(0, 16),
+    scheduledTime: toLocalDateTimeInputValue(),
     status: OrderStatus.NEW_REQUEST,
     managerName: currentUser,
     isBirzhaOpen: false,
