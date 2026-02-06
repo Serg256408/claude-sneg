@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Order, OrderStatus, TripEvidence, Contractor, AssetType, DriverAssignment, formatPrice, formatDateTime, generateId, DateRange, isOrderInDateRange, normalizeOrderStatus, getOrderStatusLabel, calculateAssignmentEarnings, PriceUnit, isLoaderType, getShiftHours } from './types';
+import { Order, OrderStatus, TripEvidence, Contractor, AssetType, DriverAssignment, Message, formatPrice, formatDateTime, generateId, DateRange, isOrderInDateRange, normalizeOrderStatus, getOrderStatusLabel, calculateAssignmentEarnings, PriceUnit, isLoaderType, getShiftHours, findRequirementForAssignment } from './types';
+import ConfirmModal from './ConfirmModal';
 
 interface DriverPortalProps {
   orders: Order[];
@@ -10,6 +11,7 @@ interface DriverPortalProps {
   onAcceptJob: (orderId: string, contractorId: string, assetType: AssetType) => void;
   onFinishWork: (orderId: string) => void;
   onUpdateDriverAssignment?: (orderId: string, driverAssignmentId: string, updates: Partial<DriverAssignment>) => void;
+  onUpdateOrder?: (orderId: string, updates: Partial<Order>) => void;
   embedded?: boolean;
   hideCompletedAssignments?: boolean;
 }
@@ -47,6 +49,21 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
     from: dateFrom || undefined,
     to: dateTo || undefined
   }), [dateFrom, dateTo]);
+
+  // Состояние модалки подтверждения
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmText?: string;
+    confirmColor?: 'red' | 'blue' | 'green';
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {}
+  });
 
   
   // Получаем текущее назначение водителя из выбранного заказа (для погрузчика)
@@ -114,7 +131,13 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
     if (!selectedOrder || !currentDriverAssignment || !onUpdateDriverAssignment) {
       return;
     }
-    onUpdateDriverAssignment(selectedOrder.order.id, currentDriverAssignment.id, { [field]: value });
+    // При начале смены меняем статус на "В работе"
+    const updates: Partial<DriverAssignment> = { [field]: value };
+    if (field === 'shiftStartTime' && value) {
+      updates.status = 'working';
+      updates.startedAt = new Date().toISOString();
+    }
+    onUpdateDriverAssignment(selectedOrder.order.id, currentDriverAssignment.id, updates);
   }, [selectedOrder, currentDriverAssignment, onUpdateDriverAssignment]);
 
   const markAssignmentStatus = useCallback((status: DriverAssignment['status']) => {
@@ -241,9 +264,12 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
     return companyBoard.filter(j => isOrderInDateRange(j.order, dateRange));
   }, [companyBoard, dateRange]);
 
-  const displayJobs = activeTab === 'mine' 
-    ? filteredMyJobs.map(j => ({ order: j.order, type: j.type }))  // myJobs содержит { order, type, driverDetail }
-    : activeTab === 'public' ? filteredPublicBoard : filteredCompanyBoard;
+  type DisplayJob = { order: Order; type: AssetType; driverDetail?: DriverAssignment };
+  const displayJobs: DisplayJob[] = activeTab === 'mine' 
+    ? filteredMyJobs.map(j => ({ order: j.order, type: j.type, driverDetail: j.driverDetail }))  // myJobs содержит { order, type, driverDetail }
+    : activeTab === 'public'
+      ? filteredPublicBoard.map(j => ({ order: j.order, type: j.type }))
+      : filteredCompanyBoard.map(j => ({ order: j.order, type: j.type }));
 
   // Обработка фото
   const handleFileCapture = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -380,12 +406,12 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
 
   const containerClass = embedded
     ? 'flex flex-col h-full text-white font-[\'Inter\'] bg-[#0a0f1d] rounded-3xl border border-white/5 overflow-hidden'
-    : 'flex flex-col h-full bg-[#0a0f1d] text-white font-[\'Inter\']';
+    : 'flex flex-col h-full bg-[#0a0f1d] text-white font-[\'Inter\'] min-h-screen';
 
   return (
-    <div className={containerClass}>
+    <div className={containerClass} style={{ paddingTop: 'var(--safe-area-inset-top)', paddingBottom: 'var(--safe-area-inset-bottom)' }}>
       {!embedded && (
-        <div className="p-4 bg-[#12192c] border-b border-white/5 shadow-2xl sticky top-0 z-30">
+        <div className="p-4 bg-[#12192c] border-b border-white/5 shadow-2xl sticky top-0 z-30" style={{ paddingTop: 'calc(1rem + var(--safe-area-inset-top))' }}>
           <div className="flex justify-between items-center mb-4">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-700 rounded-xl flex items-center justify-center font-black text-xl shadow-lg">
@@ -409,35 +435,35 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
           </div>
 
           <div className="grid grid-cols-4 bg-[#1c2641] p-1 rounded-xl border border-white/5 gap-1">
-            <button 
-              onClick={() => { setActiveTab('mine'); setSelectedOrder(null); }} 
-              className={`py-2.5 text-[8px] font-black uppercase rounded-lg transition-all flex flex-col items-center gap-1 ${activeTab === 'mine' ? 'bg-white text-slate-900 shadow-xl' : 'text-slate-500'}`}
+            <button
+              onClick={() => { setActiveTab('mine'); setSelectedOrder(null); }}
+              className={`py-3 min-h-[48px] text-[9px] font-black uppercase rounded-lg transition-all flex flex-col items-center justify-center gap-1 touch-feedback ${activeTab === 'mine' ? 'bg-white text-slate-900 shadow-xl' : 'text-slate-500'}`}
             >
-              <span>🚛</span>
+              <span className="text-lg">🚛</span>
               <span>В работе</span>
-              {filteredMyJobs.length > 0 && <span className="bg-blue-500 text-white text-[7px] px-1.5 rounded-full">{filteredMyJobs.length}</span>}
+              {filteredMyJobs.length > 0 && <span className="bg-blue-500 text-white text-[8px] px-1.5 rounded-full">{filteredMyJobs.length}</span>}
             </button>
-            <button 
-              onClick={() => { setActiveTab('company'); setSelectedOrder(null); }} 
-              className={`py-2.5 text-[8px] font-black uppercase rounded-lg transition-all flex flex-col items-center gap-1 ${activeTab === 'company' ? 'bg-orange-500 text-white shadow-xl' : 'text-slate-500'}`}
+            <button
+              onClick={() => { setActiveTab('company'); setSelectedOrder(null); }}
+              className={`py-3 min-h-[48px] text-[9px] font-black uppercase rounded-lg transition-all flex flex-col items-center justify-center gap-1 touch-feedback ${activeTab === 'company' ? 'bg-orange-500 text-white shadow-xl' : 'text-slate-500'}`}
             >
-              <span>📨</span>
+              <span className="text-lg">📨</span>
               <span>Прямые</span>
-              {filteredCompanyBoard.length > 0 && <span className="bg-orange-400 text-white text-[7px] px-1.5 rounded-full">{filteredCompanyBoard.length}</span>}
+              {filteredCompanyBoard.length > 0 && <span className="bg-orange-400 text-white text-[8px] px-1.5 rounded-full">{filteredCompanyBoard.length}</span>}
             </button>
-            <button 
-              onClick={() => { setActiveTab('public'); setSelectedOrder(null); }} 
-              className={`py-2.5 text-[8px] font-black uppercase rounded-lg transition-all flex flex-col items-center gap-1 ${activeTab === 'public' ? 'bg-blue-600 text-white shadow-xl' : 'text-slate-500'}`}
+            <button
+              onClick={() => { setActiveTab('public'); setSelectedOrder(null); }}
+              className={`py-3 min-h-[48px] text-[9px] font-black uppercase rounded-lg transition-all flex flex-col items-center justify-center gap-1 touch-feedback ${activeTab === 'public' ? 'bg-blue-600 text-white shadow-xl' : 'text-slate-500'}`}
             >
-              <span>🌐</span>
+              <span className="text-lg">🌐</span>
               <span>Биржа</span>
-              {filteredPublicBoard.length > 0 && <span className="bg-blue-400 text-white text-[7px] px-1.5 rounded-full">{filteredPublicBoard.length}</span>}
+              {filteredPublicBoard.length > 0 && <span className="bg-blue-400 text-white text-[8px] px-1.5 rounded-full">{filteredPublicBoard.length}</span>}
             </button>
-            <button 
-              onClick={() => { setActiveTab('earnings'); setSelectedOrder(null); }} 
-              className={`py-2.5 text-[8px] font-black uppercase rounded-lg transition-all flex flex-col items-center gap-1 ${activeTab === 'earnings' ? 'bg-green-600 text-white shadow-xl' : 'text-slate-500'}`}
+            <button
+              onClick={() => { setActiveTab('earnings'); setSelectedOrder(null); }}
+              className={`py-3 min-h-[48px] text-[9px] font-black uppercase rounded-lg transition-all flex flex-col items-center justify-center gap-1 touch-feedback ${activeTab === 'earnings' ? 'bg-green-600 text-white shadow-xl' : 'text-slate-500'}`}
             >
-              <span>💰</span>
+              <span className="text-lg">💰</span>
               <span>Заработок</span>
             </button>
           </div>
@@ -538,12 +564,19 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
         {/* Список заказов */}
         {activeTab !== 'earnings' && !activeSelectedOrder && (
           displayJobs.length > 0 ? (
-              displayJobs.map(({ order: job, type }, idx) => {
-              const requirement = job.assetRequirements.find(r => r.type === type);
-              const priceForDriver = requirement?.contractorPrice || 0;
-              const unitLabel = requirement?.priceUnit === PriceUnit.PER_HOUR
+              displayJobs.map(({ order: job, type, driverDetail }, idx) => {
+              const matchedRequirement = driverDetail
+                ? findRequirementForAssignment(job, driverDetail)
+                : job.assetRequirements.find(r => r.type === type);
+              const priceForDriver = driverDetail?.assignedPrice || matchedRequirement?.contractorPrice || 0;
+              const effectivePriceUnit = driverDetail
+                ? (driverDetail.priceUnit === PriceUnit.PER_TRIP && isLoaderType(driverDetail.assetType)
+                  ? PriceUnit.PER_SHIFT
+                  : driverDetail.priceUnit)
+                : matchedRequirement?.priceUnit;
+              const unitLabel = effectivePriceUnit === PriceUnit.PER_HOUR
                 ? 'за час'
-                : requirement?.priceUnit === PriceUnit.PER_SHIFT
+                : effectivePriceUnit === PriceUnit.PER_SHIFT
                 ? 'за смену'
                 : 'за рейс';
               const isUrgent = new Date(job.scheduledTime).getTime() - Date.now() < 3600000;
@@ -727,9 +760,9 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                               key={key}
                               type="button"
                               onClick={() => setPhotoType(key as any)}
-                              className={`py-2 px-2 rounded-xl text-[8px] font-black uppercase transition-all ${
-                                photoType === key 
-                                  ? 'bg-blue-600 text-white' 
+                              className={`py-3.5 px-3 min-h-[44px] rounded-xl text-[10px] font-black uppercase transition-all active:scale-95 touch-feedback ${
+                                photoType === key
+                                  ? 'bg-blue-600 text-white shadow-lg'
                                   : 'bg-white/5 text-slate-400 border border-white/10'
                               }`}
                             >
@@ -740,8 +773,8 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                       </div>
 
                       {/* Кнопка фото */}
-                      <label className="block w-full cursor-pointer">
-                        <div className={`bg-blue-600 p-8 rounded-3xl flex flex-col items-center gap-3 border-b-8 border-blue-800 shadow-2xl active:scale-95 transition-all ${isCapturing ? 'opacity-50' : ''}`}>
+                      <label className="block w-full cursor-pointer touch-feedback">
+                        <div className={`bg-blue-600 p-10 rounded-3xl flex flex-col items-center gap-4 border-b-8 border-blue-800 shadow-2xl active:scale-95 active:border-b-4 transition-all ${isCapturing ? 'opacity-50' : ''}`}>
                           <span className="text-5xl">{isCapturing ? '⏳' : '📸'}</span>
                           <span className="font-black uppercase tracking-widest text-white text-sm">
                             {isCapturing ? 'Обработка...' : 'Сделать фото'}
@@ -766,29 +799,122 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                             <span className="text-[10px] font-black uppercase text-slate-400">
                               Фото для рейса ({capturedPhotos.length})
                             </span>
-                            <button 
+                            <button
                               onClick={() => setCapturedPhotos([])}
-                              className="text-[9px] text-red-400 font-black uppercase"
+                              className="text-[9px] text-red-400 font-black uppercase touch-feedback px-3 py-1"
                             >
-                              Очистить
+                              Очистить все
                             </button>
                           </div>
-                          <div className="flex gap-2 overflow-x-auto pb-2">
+                          {/* Крупные превью с возможностью удаления */}
+                          <div className="grid grid-cols-2 gap-3">
                             {capturedPhotos.map((photo, i) => (
-                              <div key={i} className="relative shrink-0">
-                                <img src={photo.url} className="w-16 h-16 object-cover rounded-lg" />
-                                <span className="absolute bottom-0 left-0 right-0 bg-black/70 text-[7px] text-center py-0.5 rounded-b-lg">
+                              <div key={i} className="relative group">
+                                <img
+                                  src={photo.url}
+                                  className="w-full h-32 object-cover rounded-xl border border-white/10"
+                                  onClick={() => setShowPhotoPreview(true)}
+                                />
+                                <span className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent text-[9px] text-center py-2 rounded-b-xl font-black">
                                   {photoTypeLabels[photo.type as keyof typeof photoTypeLabels] || photo.type}
                                 </span>
+                                <button
+                                  onClick={() => setCapturedPhotos(prev => prev.filter((_, idx) => idx !== i))}
+                                  className="absolute top-1 right-1 w-8 h-8 bg-red-500 rounded-full flex items-center justify-center text-white font-black text-sm shadow-lg touch-feedback active:scale-90"
+                                >
+                                  ✕
+                                </button>
                               </div>
                             ))}
                           </div>
                           <button
                             onClick={submitTrip}
-                            className="w-full mt-3 bg-green-600 hover:bg-green-500 text-white py-4 rounded-2xl text-[11px] font-black uppercase tracking-widest shadow-lg border-b-4 border-green-800 active:border-b-0 active:translate-y-1 transition-all"
+                            className="w-full mt-3 bg-green-600 hover:bg-green-500 text-white py-5 rounded-2xl text-sm font-black uppercase tracking-wider shadow-lg border-b-4 border-green-800 active:border-b-0 active:translate-y-1 active:scale-[0.98] transition-all touch-feedback"
                           >
                             ✅ Отправить рейс на проверку
                           </button>
+                        </div>
+                      )}
+
+                      {/* Модалка подтверждения отправки рейса */}
+                      {showPhotoPreview && capturedPhotos.length > 0 && (
+                        <div className="fixed inset-0 bg-black/90 backdrop-blur-xl flex flex-col z-50 p-4" style={{ paddingTop: 'calc(1rem + var(--safe-area-inset-top))', paddingBottom: 'calc(1rem + var(--safe-area-inset-bottom))' }}>
+                          <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-lg font-black uppercase">Подтверждение рейса</h3>
+                            <button
+                              onClick={() => setShowPhotoPreview(false)}
+                              className="w-10 h-10 bg-white/10 rounded-full flex items-center justify-center text-xl touch-feedback"
+                            >
+                              ✕
+                            </button>
+                          </div>
+
+                          <div className="flex-1 overflow-y-auto space-y-4">
+                            <div className="bg-white/5 p-4 rounded-2xl border border-white/10">
+                              <div className="text-[10px] font-black text-slate-500 uppercase mb-2">Объект</div>
+                              <div className="text-lg font-black">{activeSelectedOrder?.address}</div>
+                            </div>
+
+                            <div className="text-[10px] font-black text-slate-500 uppercase mb-2">
+                              Фотографии рейса ({capturedPhotos.length})
+                            </div>
+                            <div className="space-y-3">
+                              {capturedPhotos.map((photo, i) => (
+                                <div key={i} className="relative">
+                                  <img
+                                    src={photo.url}
+                                    className="w-full h-48 object-cover rounded-2xl border border-white/10"
+                                  />
+                                  <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black to-transparent p-4 rounded-b-2xl">
+                                    <div className="flex justify-between items-center">
+                                      <span className="text-sm font-black">
+                                        {photoTypeLabels[photo.type as keyof typeof photoTypeLabels] || photo.type}
+                                      </span>
+                                      <span className="text-[9px] text-slate-400">
+                                        {new Date(photo.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <button
+                                    onClick={() => setCapturedPhotos(prev => prev.filter((_, idx) => idx !== i))}
+                                    className="absolute top-2 right-2 w-10 h-10 bg-red-500 rounded-full flex items-center justify-center text-white font-black shadow-lg touch-feedback active:scale-90"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+
+                            {/* GPS инфо */}
+                            <div className={`p-4 rounded-xl ${currentPosition ? 'bg-green-500/10 border border-green-500/20' : 'bg-red-500/10 border border-red-500/20'}`}>
+                              <div className="flex items-center gap-3">
+                                <span className="text-2xl">{currentPosition ? '📍' : '⚠️'}</span>
+                                <div>
+                                  <div className="text-sm font-black">{currentPosition ? 'Геолокация определена' : 'GPS недоступен'}</div>
+                                  {currentPosition && (
+                                    <div className="text-[10px] text-slate-400">Точность: ±{Math.round(currentPosition.accuracy)}м</div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="mt-4 space-y-3">
+                            <button
+                              onClick={() => {
+                                submitTrip();
+                              }}
+                              className="w-full bg-green-600 text-white py-5 rounded-2xl text-lg font-black uppercase tracking-wider shadow-lg border-b-4 border-green-800 active:border-b-0 active:translate-y-1 active:scale-[0.98] transition-all touch-feedback"
+                            >
+                              ✅ Подтвердить и отправить
+                            </button>
+                            <button
+                              onClick={() => setShowPhotoPreview(false)}
+                              className="w-full bg-white/10 text-white py-4 rounded-2xl text-sm font-black uppercase touch-feedback"
+                            >
+                              ← Вернуться
+                            </button>
+                          </div>
                         </div>
                       )}
 
@@ -869,7 +995,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                                 }
                                 saveLoaderShiftTime('shiftStartTime', inputStartTime);
                               }}
-                              className="w-full bg-green-600 hover:bg-green-500 text-white py-4 rounded-2xl text-[11px] font-black uppercase tracking-widest"
+                              className="w-full bg-green-600 hover:bg-green-500 text-white py-4 min-h-[48px] rounded-2xl text-[11px] font-black uppercase tracking-widest touch-feedback active:scale-95"
                             >
                               ▶️ Начать смену
                             </button>
@@ -928,14 +1054,14 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                       <button
                         type="button"
                         onClick={() => markAssignmentStatus('en_route')}
-                        className="bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-2xl text-[9px] font-black uppercase"
+                        className="bg-blue-600 hover:bg-blue-500 text-white py-3.5 min-h-[48px] rounded-2xl text-[10px] font-black uppercase touch-feedback active:scale-95"
                       >
                         🚚 В пути
                       </button>
                       <button
                         type="button"
                         onClick={() => markAssignmentStatus('working')}
-                        className="bg-green-600 hover:bg-green-500 text-white py-3 rounded-2xl text-[9px] font-black uppercase"
+                        className="bg-green-600 hover:bg-green-500 text-white py-3.5 min-h-[48px] rounded-2xl text-[10px] font-black uppercase touch-feedback active:scale-95"
                       >
                         ✅ В работе
                       </button>
@@ -943,26 +1069,33 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                   )}
 
                   {/* Кнопка завершения */}
-                  <button 
-                    onClick={() => { 
-                      if (confirm('Завершить работу на этом объекте?')) { 
-                        if (selectedOrder?.type !== AssetType.TRUCK && loaderShiftStarted && !loaderEndTime) {
-                          const endTime = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-                          setInputEndTime(endTime);
-                          saveLoaderShiftTime('shiftEndTime', endTime);
+                  <button
+                    onClick={() => {
+                      setConfirmModal({
+                        isOpen: true,
+                        title: 'Завершение работы',
+                        message: 'Завершить работу на этом объекте?',
+                        confirmText: 'Завершить',
+                        confirmColor: 'green',
+                        onConfirm: () => {
+                          if (selectedOrder?.type !== AssetType.TRUCK && loaderShiftStarted && !loaderEndTime) {
+                            const endTime = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+                            setInputEndTime(endTime);
+                            saveLoaderShiftTime('shiftEndTime', endTime);
+                          }
+                          if (onUpdateDriverAssignment && currentDriverAssignment) {
+                            markAssignmentStatus('completed');
+                          } else {
+                            onFinishWork(activeSelectedOrder.id);
+                          }
+                          setSelectedOrder(null);
+                          setInputStartTime('');
+                          setInputEndTime('');
+                          setConfirmModal(prev => ({ ...prev, isOpen: false }));
                         }
-                        if (onUpdateDriverAssignment && currentDriverAssignment) {
-                          markAssignmentStatus('completed');
-                        } else {
-                          onFinishWork(activeSelectedOrder.id);
-                        }
-                        setSelectedOrder(null);
-                        // Время смены сохраняется в данных заказа, локальный ввод сбрасывается автоматически при смене заказа
-                        setInputStartTime('');
-                        setInputEndTime('');
-                      } 
-                    }} 
-                    className="w-full bg-slate-800 hover:bg-slate-700 p-5 rounded-3xl text-[10px] font-black uppercase text-slate-400 mt-4 transition-all"
+                      });
+                    }}
+                    className="w-full bg-slate-800 hover:bg-slate-700 p-5 min-h-[48px] rounded-3xl text-[10px] font-black uppercase text-slate-400 mt-4 transition-all touch-feedback active:scale-95"
                   >
                     🏁 Завершить работу на объекте
                   </button>
@@ -987,6 +1120,17 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
           </div>
         )}
       </div>
+
+      {/* Модалка подтверждения */}
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        confirmText={confirmModal.confirmText}
+        confirmColor={confirmModal.confirmColor}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 };

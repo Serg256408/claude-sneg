@@ -1,5 +1,14 @@
-﻿import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { Order, OrderStatus, AssetType, AssetRequirement, OrderRestrictions, CustomerContact, Customer, PaymentType, formatPrice, formatDateTime, generateId, generateOrderNumber, PriceUnit, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateOrderTotals, getUnitsForRequirement, getTripCounts, isTruckType, isLoaderType, toLocalDateTimeInputValue } from './types';
+﻿import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import pdfMake from 'pdfmake/build/pdfmake';
+import * as pdfFonts from 'pdfmake/build/vfs_fonts';
+import JSZip from 'jszip';
+const fontBundle: any = (pdfFonts as any).pdfMake?.vfs
+  ? (pdfFonts as any).pdfMake
+  : (pdfFonts as any).default?.pdfMake;
+if (fontBundle?.vfs) {
+  (pdfMake as any).vfs = fontBundle.vfs;
+}
+import { Order, OrderStatus, AssetType, AssetRequirement, OrderRestrictions, CustomerContact, Customer, Message, formatPrice, formatDateTime, generateId, generateOrderNumber, PriceUnit, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateOrderTotals, getUnitsForRequirement, getTripCounts, isTruckType, isLoaderType, toLocalDateTimeInputValue } from './types';
 
 interface CustomerPortalProps {
   orders: Order[];
@@ -18,6 +27,18 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
   const [quotePreviewOrder, setQuotePreviewOrder] = useState<Order | null>(null);
   const [feedbackRating, setFeedbackRating] = useState(5);
   const [feedbackComment, setFeedbackComment] = useState('');
+  const [accountantChatModal, setAccountantChatModal] = useState<{ isOpen: boolean; order: Order | null; message: string }>({
+    isOpen: false,
+    order: null,
+    message: '',
+  });
+  const [managerChatModal, setManagerChatModal] = useState<{ isOpen: boolean; order: Order | null; message: string }>({
+    isOpen: false,
+    order: null,
+    message: '',
+  });
+  const managerChatRef = useRef<HTMLDivElement>(null);
+  const accountantChatRef = useRef<HTMLDivElement>(null);
   const [orderSearch, setOrderSearch] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -119,6 +140,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
 
   const calculateOrderTotalsLocal = useCallback((order: Order) => {
     const totals = calculateOrderTotals(order, { mode: 'actual_or_planned', includeCharges: true });
+    const plannedTotals = calculateOrderTotals(order, { mode: 'planned', includeCharges: true });
+    const actualTotals = calculateOrderTotals(order, { mode: 'actual', includeCharges: true });
     let totalTruckCost = 0;
     let totalLoaderCost = 0;
     (order.assetRequirements || []).forEach(req => {
@@ -137,14 +160,128 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
       totalTrips,
       totalTruckCost,
       totalLoaderCost,
-      grandTotal: totals.customerTotal
+      grandTotal: totals.customerTotal,
+      plannedTotal: plannedTotals.customerTotal,
+      actualTotal: actualTotals.customerTotal
     };
   }, []);
 
+  const getAccountantThread = useCallback((order: Order) => {
+    return (order.messages || [])
+      .filter(msg =>
+        (msg.fromRole === 'accountant' && (!msg.toRole || msg.toRole === 'customer')) ||
+        (msg.fromRole === 'customer' && (!msg.toRole || msg.toRole === 'accountant'))
+      )
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }, []);
+
+  const openAccountantChat = useCallback((order: Order) => {
+    setAccountantChatModal({ isOpen: true, order, message: '' });
+    const updatedMessages = (order.messages || []).map(msg => {
+      const shouldMarkRead =
+        msg.fromRole === 'accountant' &&
+        (!msg.toRole || msg.toRole === 'customer') &&
+        !msg.isRead;
+      return shouldMarkRead ? { ...msg, isRead: true, readAt: new Date().toISOString() } : msg;
+    });
+    const changed = (order.messages || []).some((msg, idx) => msg !== updatedMessages[idx]);
+    if (changed) {
+      const unreadCount = updatedMessages.filter(m => !m.isRead).length;
+      onUpdateOrder(order.id, { messages: updatedMessages, unreadMessages: unreadCount });
+    }
+  }, [onUpdateOrder]);
+
+  const sendAccountantMessage = useCallback(() => {
+    if (!accountantChatModal.order || !accountantChatModal.message.trim()) return;
+    const order = accountantChatModal.order;
+    const message: Message = {
+      id: generateId(),
+      orderId: order.id,
+      fromRole: 'customer',
+      fromName: customerName || order.contactInfo?.name || 'Клиент',
+      fromId: selectedCustomerId || order.customerId,
+      toRole: 'accountant',
+      text: accountantChatModal.message.trim(),
+      timestamp: new Date().toISOString(),
+      isRead: false,
+    };
+    onUpdateOrder(order.id, {
+      messages: [...(order.messages || []), message],
+      unreadMessages: (order.unreadMessages || 0) + 1,
+    });
+    setAccountantChatModal(prev => ({ ...prev, message: '' }));
+  }, [accountantChatModal, customerName, selectedCustomerId, onUpdateOrder]);
+
+  const chatOrder = accountantChatModal.order;
+  const chatMessages = chatOrder ? getAccountantThread(chatOrder) : [];
+
+  // Функции для чата с менеджером
+  const getManagerThread = useCallback((order: Order) => {
+    return (order.messages || [])
+      .filter(msg =>
+        (msg.fromRole === 'dispatcher' && (!msg.toRole || msg.toRole === 'customer')) ||
+        (msg.fromRole === 'customer' && (!msg.toRole || msg.toRole === 'dispatcher'))
+      )
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }, []);
+
+  const openManagerChat = useCallback((order: Order) => {
+    setManagerChatModal({ isOpen: true, order, message: '' });
+    const updatedMessages = (order.messages || []).map(msg => {
+      const shouldMarkRead =
+        msg.fromRole === 'dispatcher' &&
+        (!msg.toRole || msg.toRole === 'customer') &&
+        !msg.isRead;
+      return shouldMarkRead ? { ...msg, isRead: true, readAt: new Date().toISOString() } : msg;
+    });
+    const changed = (order.messages || []).some((msg, idx) => msg !== updatedMessages[idx]);
+    if (changed) {
+      const unreadCount = updatedMessages.filter(m => !m.isRead).length;
+      onUpdateOrder(order.id, { messages: updatedMessages, unreadMessages: unreadCount });
+    }
+  }, [onUpdateOrder]);
+
+  const sendManagerMessage = useCallback(() => {
+    if (!managerChatModal.order || !managerChatModal.message.trim()) return;
+    const order = managerChatModal.order;
+    const message: Message = {
+      id: generateId(),
+      orderId: order.id,
+      fromRole: 'customer',
+      fromName: customerName || order.contactInfo?.name || 'Клиент',
+      fromId: selectedCustomerId || order.customerId,
+      toRole: 'dispatcher',
+      text: managerChatModal.message.trim(),
+      timestamp: new Date().toISOString(),
+      isRead: false,
+    };
+    onUpdateOrder(order.id, {
+      messages: [...(order.messages || []), message],
+      unreadMessages: (order.unreadMessages || 0) + 1,
+    });
+    setManagerChatModal(prev => ({ ...prev, message: '' }));
+  }, [managerChatModal, customerName, selectedCustomerId, onUpdateOrder]);
+
+  const managerChatOrder = managerChatModal.order;
+  const managerChatMessages = managerChatOrder ? getManagerThread(managerChatOrder) : [];
+
+  // Авто-скролл к последнему сообщению в чате с менеджером
+  useEffect(() => {
+    if (managerChatModal.isOpen && managerChatRef.current) {
+      managerChatRef.current.scrollTop = managerChatRef.current.scrollHeight;
+    }
+  }, [managerChatModal.isOpen, managerChatMessages.length]);
+
+  // Авто-скролл к последнему сообщению в чате с бухгалтером
+  useEffect(() => {
+    if (accountantChatModal.isOpen && accountantChatRef.current) {
+      accountantChatRef.current.scrollTop = accountantChatRef.current.scrollHeight;
+    }
+  }, [accountantChatModal.isOpen]);
+
   const buildQuotePreviewData = useCallback((order: Order) => {
     const orderCustomer = customers.find(c => c.id === order.customerId) || customers.find(c => c.phone === order.contactInfo?.phone);
-    const paymentType = orderCustomer?.paymentType;
-    const vatRate = paymentType === PaymentType.VAT_20 ? 0.22 : 0;
+    const vatRate = 0.22;
     const quote = order.currentQuote;
 
     const items: { label: string; units: number; unitLabel: string; unitPrice: number; total: number }[] = [];
@@ -176,8 +313,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
       items.push({ label: 'Подача', units: 1, unitLabel: 'услуга', unitPrice: quote.deliveryCharge, total: quote.deliveryCharge });
     }
 
-    const vat = vatRate > 0 ? subtotal * vatRate : 0;
-    const total = subtotal + vat;
+    const vat = vatRate > 0 ? subtotal * (vatRate / (1 + vatRate)) : 0;
+    const total = subtotal;
 
     return {
       orderCustomer,
@@ -186,9 +323,208 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
       subtotal,
       vat,
       total,
-      notes: quote?.notes || ''
+      notes: quote?.notes || '',
+      vatIncluded: true
     };
   }, [customers]);
+
+  const getCustomerRequisites = useCallback((order: Order) => {
+    const orderCustomer = customers.find(c => c.id === order.customerId) || customers.find(c => c.phone === order.contactInfo?.phone);
+    return {
+      name: order.contactInfo?.companyName || orderCustomer?.name || order.customer || 'Клиент',
+      inn: order.contactInfo?.inn || orderCustomer?.inn || '',
+      phone: order.contactInfo?.phone || orderCustomer?.phone || '',
+      email: order.contactInfo?.email || orderCustomer?.email || '',
+      address: orderCustomer?.address || order.address || ''
+    };
+  }, [customers]);
+
+  const buildInvoicePdf = useCallback((order: Order) => {
+    const quoteData = buildQuotePreviewData(order);
+    const requisites = getCustomerRequisites(order);
+    const issueDate = new Date().toLocaleDateString('ru-RU');
+    const tableBody = [
+      ['№', 'Наименование', 'Кол-во', 'Цена', 'Сумма'],
+      ...quoteData.items.map((item, idx) => ([
+        String(idx + 1),
+        item.label,
+        `${item.units} ${item.unitLabel}`,
+        formatPrice(item.unitPrice),
+        formatPrice(item.total)
+      ]))
+    ];
+
+    const docDefinition = {
+      content: [
+        { text: 'СЧЁТ НА ОПЛАТУ', style: 'header', alignment: 'center' },
+        { text: `№ ${order.orderNumber || ''} от ${issueDate}`, style: 'subheader', alignment: 'center', margin: [0, 4, 0, 8] },
+        { text: 'Поставщик: ООО "SnowForce"', margin: [0, 4, 0, 0] },
+        { text: `Покупатель: ${requisites.name}`, margin: [0, 2, 0, 0] },
+        requisites.inn ? { text: `ИНН: ${requisites.inn}`, margin: [0, 2, 0, 0] } : null,
+        requisites.phone ? { text: `Телефон: ${requisites.phone}`, margin: [0, 2, 0, 0] } : null,
+        requisites.email ? { text: `Email: ${requisites.email}`, margin: [0, 2, 0, 0] } : null,
+        requisites.address ? { text: `Адрес: ${requisites.address}`, margin: [0, 2, 0, 6] } : null,
+        {
+          table: {
+            headerRows: 1,
+            widths: ['auto', '*', 'auto', 'auto', 'auto'],
+            body: tableBody
+          },
+          layout: 'lightHorizontalLines'
+        },
+        {
+          columns: [
+            { width: '*', text: '' },
+            {
+              width: 'auto',
+              table: {
+                body: [
+                  ['Подытог (с НДС)', formatPrice(quoteData.total)],
+                  [`НДС ${(quoteData.vatRate * 100).toFixed(0)}% (в т.ч.)`, formatPrice(quoteData.vat)],
+                  ['Итого', formatPrice(quoteData.total)]
+                ]
+              },
+              layout: 'noBorders',
+              margin: [0, 6, 0, 0]
+            }
+          ]
+        },
+        quoteData.notes ? { text: `Комментарий: ${quoteData.notes}`, margin: [0, 8, 0, 0] } : null
+      ].filter(Boolean),
+      defaultStyle: { font: 'Roboto', fontSize: 10 },
+      styles: {
+        header: { fontSize: 16, bold: true },
+        subheader: { fontSize: 12, bold: true }
+      }
+    };
+
+    pdfMake.createPdf(docDefinition as any).download(`Счет_${order.orderNumber || 'заказ'}.pdf`);
+  }, [buildQuotePreviewData, getCustomerRequisites]);
+
+  const buildContractPdf = useCallback((order: Order) => {
+    const quoteData = buildQuotePreviewData(order);
+    const requisites = getCustomerRequisites(order);
+    const issueDate = new Date().toLocaleDateString('ru-RU');
+
+    const docDefinition = {
+      content: [
+        { text: 'ДОГОВОР НА ОКАЗАНИЕ УСЛУГ', style: 'header', alignment: 'center' },
+        { text: `№ ${order.orderNumber || ''} от ${issueDate}`, alignment: 'center', margin: [0, 4, 0, 8] },
+        { text: 'Исполнитель: ООО "SnowForce"', margin: [0, 6, 0, 0] },
+        { text: `Заказчик: ${requisites.name}`, margin: [0, 2, 0, 0] },
+        requisites.inn ? { text: `ИНН: ${requisites.inn}`, margin: [0, 2, 0, 0] } : null,
+        requisites.phone ? { text: `Телефон: ${requisites.phone}`, margin: [0, 2, 0, 0] } : null,
+        requisites.email ? { text: `Email: ${requisites.email}`, margin: [0, 2, 0, 0] } : null,
+        requisites.address ? { text: `Адрес: ${requisites.address}`, margin: [0, 2, 0, 8] } : null,
+        { text: '1. Предмет договора', style: 'section' },
+        { text: `Исполнитель обязуется оказать услуги по вывозу снега по адресу: ${order.address}.` },
+        { text: '2. Стоимость и порядок расчетов', style: 'section' },
+        { text: `Стоимость услуг формируется согласно коммерческому предложению и счёту. Итоговая сумма: ${formatPrice(quoteData.total)} (с НДС ${(quoteData.vatRate * 100).toFixed(0)}%).` },
+        { text: '3. Сроки выполнения', style: 'section' },
+        { text: `Сроки оказания услуг согласуются сторонами. Плановая дата начала работ: ${formatDateTime(order.scheduledTime).split(',')[0]}.` },
+        { text: '4. Подписи сторон', style: 'section' },
+        {
+          columns: [
+            { text: 'Исполнитель: ____________________', margin: [0, 12, 0, 0] },
+            { text: 'Заказчик: ______________________', margin: [0, 12, 0, 0] }
+          ]
+        }
+      ].filter(Boolean),
+      defaultStyle: { font: 'Roboto', fontSize: 10 },
+      styles: {
+        header: { fontSize: 14, bold: true },
+        section: { fontSize: 11, bold: true, margin: [0, 10, 0, 4] }
+      }
+    };
+
+    pdfMake.createPdf(docDefinition as any).download(`Договор_${order.orderNumber || 'заказ'}.pdf`);
+  }, [buildQuotePreviewData, getCustomerRequisites]);
+  const buildFullReportPdf = useCallback((order: Order) => {
+    const evidences = getCustomerEvidences(order);
+    const totalTrips = getCustomerTripsCount(order);
+    const driverLookup = new Map<string, any>();
+    (order.driverDetails || []).forEach(driver => {
+      if (driver?.id) driverLookup.set(driver.id, driver);
+      if (driver?.driverName) driverLookup.set(driver.driverName, driver);
+    });
+
+    const getAssetLabel = (assetType?: AssetType) => {
+      if (!assetType) return '—';
+      return isLoaderType(assetType) ? 'Погрузчик' : 'Самосвал';
+    };
+
+    const photoTypeLabels: Record<string, string> = {
+      loading: 'Погрузка',
+      full_truck: 'Полный кузов',
+      unloading: 'Выгрузка',
+      ticket: 'Талон',
+      other: 'Фото'
+    };
+
+    const tableBody = [
+      ['№', 'Дата/время', 'Водитель', 'Техника', 'Госномер', 'Рейс', 'Адрес', 'Фото']
+    ];
+
+    evidences.forEach((ev, index) => {
+      const driver = ev.assignmentId ? driverLookup.get(ev.assignmentId) : driverLookup.get(ev.driverName);
+      const photos = ev.photos && ev.photos.length > 0 ? ev.photos : (ev.photo ? [{ type: 'other' as const }] : []);
+      const photoSummary = photos.length
+        ? photos.map(p => photoTypeLabels[p.type] || 'Фото').join(', ')
+        : '—';
+      tableBody.push([
+        String(index + 1),
+        formatDateTime(ev.timestamp),
+        driver?.driverName || ev.driverName || '—',
+        getAssetLabel(driver?.assetType),
+        driver?.vehicleNumber || driver?.vehicleInfo || '—',
+        `#${ev.tripNumber || index + 1}`,
+        order.address || '—',
+        photoSummary
+      ]);
+    });
+
+    const docDefinition = {
+      content: [
+        { text: 'ТРАНСКОМ', style: 'brand' },
+        { text: 'Реестр выполненных рейсов', style: 'title' },
+        {
+          columns: [
+            [
+              { text: `Заказ № ${order.orderNumber || order.id}`, style: 'meta' },
+              { text: `Заказчик: ${order.customer || '—'}`, style: 'meta' },
+              { text: `Адрес: ${order.address || '—'}`, style: 'meta' },
+              { text: `Подача: ${formatDateTime(order.scheduledTime)}`, style: 'meta' }
+            ],
+            [
+              { text: `Статус: ${getOrderStatusLabel(order.status)}`, style: 'meta' },
+              { text: `Рейсов: ${totalTrips}`, style: 'meta' },
+              order.completedAt ? { text: `Завершение: ${formatDateTime(order.completedAt)}`, style: 'meta' } : { text: '' }
+            ]
+          ],
+          columnGap: 20,
+          margin: [0, 8, 0, 8]
+        },
+        {
+          table: {
+            headerRows: 1,
+            widths: [18, 70, 60, 55, 55, 35, '*', 60],
+            body: tableBody
+          },
+          layout: 'lightHorizontalLines'
+        },
+        { text: `Сформировано: ${new Date().toLocaleDateString('ru-RU')} ${new Date().toLocaleTimeString('ru-RU')}`, style: 'footer' }
+      ],
+      defaultStyle: { font: 'Roboto', fontSize: 9 },
+      styles: {
+        brand: { fontSize: 18, bold: true, color: '#0f172a' },
+        title: { fontSize: 12, bold: true, margin: [0, 4, 0, 6] },
+        meta: { fontSize: 9, color: '#475569' },
+        footer: { fontSize: 8, color: '#94a3b8', margin: [0, 8, 0, 0] }
+      }
+    };
+
+    pdfMake.createPdf(docDefinition as any).download(`Транском_реестр_${order.orderNumber || 'заказ'}.pdf`);
+  }, [getCustomerEvidences, getCustomerTripsCount]);
 
   // Форма нового заказа
   const [formData, setFormData] = useState<Partial<Order>>({
@@ -271,21 +607,35 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
     
     onAddOrder(newOrder);
     setView('active');
-    setShareStatus('✅ Заявка успешно отправлена! Менеджер свяжется с вами.');
+    setShareStatus('Заявка успешно отправлена! Менеджер свяжется с вами.');
     setTimeout(() => setShareStatus(null), 5000);
   };
 
   // Генерация текстового отчёта / счёта / договора (симуляция PDF)
   const generateReport = useCallback(async (order: Order, type: 'act' | 'invoice' | 'full' | 'contract' | 'quote') => {
     setIsProcessingDoc(type);
+
+    if (type === 'invoice') {
+      buildInvoicePdf(order);
+      setIsProcessingDoc(null);
+      return;
+    }
+    if (type === 'contract') {
+      buildContractPdf(order);
+      setIsProcessingDoc(null);
+      return;
+    }
+    if (type === 'full') {
+      buildFullReportPdf(order);
+      setIsProcessingDoc(null);
+      return;
+    }
     
     // Симуляция генерации документа
     await new Promise(resolve => setTimeout(resolve, 2000));
     
     const totals = calculateOrderTotalsLocal(order);
-    const orderCustomer = customers.find(c => c.id === order.customerId) || customers.find(c => c.phone === order.contactInfo?.phone);
-    const paymentType = orderCustomer?.paymentType;
-    const vatRate = paymentType === PaymentType.VAT_20 ? 0.22 : 0;
+    const vatRate = 0.22;
     const getUnitsForReq = (req: AssetRequirement) => {
       return getUnitsForRequirement(order, req, { mode: 'actual_or_planned' });
     };
@@ -367,10 +717,10 @@ ${type === 'quote' ? `в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв
 
 ${quoteLines()}
 
-───────────────────────────────────────────────────────────
-ПОДЫТОГ: ${formatPrice(quoteSubtotal())}
-${vatRate > 0 ? `НДС 22%: ${formatPrice(quoteSubtotal() * vatRate)}` : 'НДС: без НДС'}
-ИТОГО: ${formatPrice(quoteSubtotal() + (quoteSubtotal() * vatRate))}
+-----------------------------------------------------------
+ПОДЫТОГ (с НДС): ${formatPrice(quoteSubtotal())}
+${vatRate > 0 ? `НДС 22% (в т.ч.): ${formatPrice(quoteSubtotal() * (vatRate / (1 + vatRate)))}` : 'НДС: без НДС'}
+ИТОГО: ${formatPrice(quoteSubtotal())}
 ` : `в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
                          ИТОГИ РАБОТ
 в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
@@ -381,16 +731,16 @@ ${order.assetRequirements.map(req => {
   return `${req.type}: ${formatPrice(req.customerPrice || 0)} Г— ${units} = ${formatPrice((req.customerPrice || 0) * units)}`;
 }).join('\n')}
 
-───────────────────────────────────────────────────────────
+-----------------------------------------------------------
 ИТОГО К ОПЛАТЕ: ${formatPrice(totals.grandTotal)}` }
-───────────────────────────────────────────────────────────
+-----------------------------------------------------------
 
 ${type === 'full' ? `
 в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
                        РЕЕСТР РЕЙСОВ
 в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
 ${confirmedEvidences.map((ev, i) => 
-  `${i + 1}. ${formatDateTime(ev.timestamp)} - ${ev.driverName} ${ev.confirmed ? '✓ Подтверждён' : '⏳ На проверке'}`
+  `${i + 1}. ${formatDateTime(ev.timestamp)} - ${ev.driverName} ${ev.confirmed ? 'Подтверждён' : 'На проверке'}`
 ).join('\n')}
 ` : ''}
 
@@ -412,21 +762,77 @@ ${confirmedEvidences.map((ev, i) =>
     URL.revokeObjectURL(url);
 
     setIsProcessingDoc(null);
-    setShareStatus(`✅ Документ "${type}" успешно сформирован и загружен.`);
+    setShareStatus(`Документ "${type}" успешно сформирован и загружен.`);
     setTimeout(() => setShareStatus(null), 3000);
-  }, [calculateOrderTotalsLocal]);
+  }, [buildContractPdf, buildInvoicePdf, buildFullReportPdf, calculateOrderTotalsLocal]);
 
   // Скачивание архива фото
   const downloadPhotos = useCallback(async (order: Order) => {
     setIsProcessingDoc('photos');
-    
-    // В реальном приложении здесь был бы zip-архив
-    // Пока просто показываем уведомление
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    setIsProcessingDoc(null);
-    setShareStatus(`📸 Фотоархив содержит ${getConfirmedEvidences(order).length} фото. Функция в разработке.`);
-    setTimeout(() => setShareStatus(null), 4000);
+
+    try {
+      const evidences = getConfirmedEvidences(order);
+      const photos = evidences.flatMap((ev, evIndex) => {
+        const list = ev.photos && ev.photos.length > 0
+          ? ev.photos
+          : (ev.photo ? [{ url: ev.photo, type: 'other' as const, timestamp: ev.timestamp }] : []);
+        return list.map((photo, idx) => ({
+          url: photo.url,
+          type: photo.type,
+          tripNumber: ev.tripNumber || evIndex + 1,
+          index: idx + 1
+        }));
+      });
+
+      if (photos.length === 0) {
+        setShareStatus('Нет фото для выгрузки.');
+        setTimeout(() => setShareStatus(null), 3000);
+        return;
+      }
+
+      const zip = new JSZip();
+      let added = 0;
+
+      for (const photo of photos) {
+        if (!photo.url) continue;
+        try {
+          const response = await fetch(photo.url);
+          const blob = await response.blob();
+          const type = (blob.type || '').toLowerCase();
+          const ext = type.includes('png') ? 'png' : type.includes('jpeg') ? 'jpg' : 'jpg';
+          const fileName = `trip_${String(photo.tripNumber).padStart(3, '0')}_${photo.type}_${photo.index}.${ext}`;
+          zip.file(fileName, blob);
+          added += 1;
+        } catch {
+          // пропускаем ошибки загрузки отдельных файлов
+        }
+      }
+
+      if (added === 0) {
+        setShareStatus('Не удалось собрать фото для выгрузки.');
+        setTimeout(() => setShareStatus(null), 3000);
+        return;
+      }
+
+      const zipBlob = await zip.generateAsync({
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 }
+      });
+      const url = URL.createObjectURL(zipBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `transkom_photos_${order.orderNumber || order.id}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      setShareStatus(`Фотоархив (${added} файлов) скачан.`);
+      setTimeout(() => setShareStatus(null), 4000);
+    } finally {
+      setIsProcessingDoc(null);
+    }
   }, [getConfirmedEvidences]);
 
   // Отправка в мессенджеры
@@ -434,7 +840,7 @@ ${confirmedEvidences.map((ev, i) =>
     const totals = calculateOrderTotalsLocal(order);
     const statusLabel = getOrderStatusLabel(order.status);
     const message = encodeURIComponent(
-      `📊 Отчёт SnowForce\n\n` +
+      `Отчёт SnowForce\n\n` +
       `Статус: ${statusLabel}\n` +
       `Объект: ${order.address}\n` +
       `Рейсов: ${totals.totalTrips}\n` +
@@ -449,7 +855,27 @@ ${confirmedEvidences.map((ev, i) =>
     } else {
       window.open(`mailto:?subject=Отчёт SnowForce ${order.orderNumber}&body=${message}`, '_blank');
     }
-  }, [calculateOrderTotalsLocal]);
+  }, [buildContractPdf, buildInvoicePdf, calculateOrderTotalsLocal]);
+
+  const downloadAttachment = useCallback((attachment: { url: string; name?: string }) => {
+    if (!attachment?.url) return;
+    const link = document.createElement('a');
+    link.href = attachment.url;
+    link.download = attachment.name || 'document';
+    link.target = '_blank';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, []);
+
+  const downloadClosingDocs = useCallback((order: Order) => {
+    const attachments = order.closingDocs?.attachments || [];
+    if (attachments.length > 0) {
+      attachments.forEach(att => downloadAttachment(att));
+      return;
+    }
+    generateReport(order, 'act');
+  }, [downloadAttachment, generateReport]);
 
   // Подтверждение условий
   const handleConfirmOrder = useCallback((orderId: string, urgent: boolean = false) => {
@@ -469,7 +895,7 @@ ${confirmedEvidences.map((ev, i) =>
       }]
     });
     
-    setShareStatus(urgent ? '🚀 Заявка запущена СРОЧНО! Техника выезжает.' : '✅ Условия подтверждены. Начинаем работу!');
+    setShareStatus(urgent ? 'Заявка запущена СРОЧНО! Техника выезжает.' : 'Условия подтверждены. Начинаем работу!');
     setTimeout(() => setShareStatus(null), 5000);
   }, [orders, customerName, onUpdateOrder]);
 
@@ -482,7 +908,7 @@ ${confirmedEvidences.map((ev, i) =>
       paymentReceiptUrl: url
     });
 
-    setShareStatus('✅ Платёжка загружена. Менеджер увидит её в системе.');
+    setShareStatus('Платёжка загружена. Менеджер увидит её в системе.');
     setTimeout(() => setShareStatus(null), 5000);
   }, [onUpdateOrder]);
 
@@ -499,7 +925,7 @@ ${confirmedEvidences.map((ev, i) =>
     });
     
     setShowFeedbackModal(false);
-    setShareStatus('⭐ Спасибо за отзыв! Ваше мнение важно для нас.');
+    setShareStatus('Спасибо за отзыв! Ваше мнение важно для нас.');
     setTimeout(() => setShareStatus(null), 4000);
   }, [selectedOrderId, feedbackRating, feedbackComment, onUpdateOrder]);
 
@@ -635,7 +1061,7 @@ ${confirmedEvidences.map((ev, i) =>
       {/* Header */}
       <div className="p-4 bg-[#12192c] border-b border-white/5 flex flex-col md:flex-row justify-between items-center sticky top-0 z-20 gap-4">
         <div className="flex items-center gap-3">
-          <span className="text-3xl">❄️</span>
+          <span className="text-3xl">👤</span>
           <div>
             <h1 className="text-lg font-black uppercase tracking-tight">Личный кабинет</h1>
             {customerName && <p className="text-[9px] text-blue-400 font-bold">{customerName}</p>}
@@ -657,13 +1083,13 @@ ${confirmedEvidences.map((ev, i) =>
         
         <div className="flex bg-[#1c2641] p-1 rounded-full border border-white/5 shadow-2xl">
           <button onClick={() => { setView('active'); setSelectedOrderId(null); }} className={`px-5 py-2 text-[9px] font-bold uppercase rounded-full transition-all whitespace-nowrap ${view === 'active' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>
-            📋 Текущие
+            Текущие
           </button>
           <button onClick={() => setView('form')} className={`px-5 py-2 text-[9px] font-bold uppercase rounded-full transition-all whitespace-nowrap ${view === 'form' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>
-            ➕ Новый заказ
+            Новый заказ
           </button>
           <button onClick={() => { setView('history'); setSelectedOrderId(null); }} className={`px-5 py-2 text-[9px] font-bold uppercase rounded-full transition-all whitespace-nowrap ${view === 'history' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>
-            📜 История
+            История
           </button>
         </div>
       </div>
@@ -728,7 +1154,11 @@ ${confirmedEvidences.map((ev, i) =>
                 const totals = calculateOrderTotalsLocal(order);
                 const steps = getProgressSteps(order);
                 const needsConfirmation = normalizeOrderStatus(order.status) === OrderStatus.AWAITING_CUSTOMER;
+                const isClosingDocsPriority = order.status === OrderStatus.CLOSING_DOCS_SENT;
                 const currentQuote = order.currentQuote;
+                const accountantMessages = (order.messages || []).filter(m => m.fromRole === 'accountant');
+                const managerMessages = (order.messages || []).filter(m => m.fromRole === 'dispatcher' && (!m.toRole || m.toRole === 'customer'));
+                const unreadManagerCount = managerMessages.filter(m => !m.isRead).length;
 
                 return (
                   <div key={order.id} className="bg-[#12192c] rounded-[2rem] border border-white/5 overflow-hidden shadow-2xl">
@@ -771,7 +1201,7 @@ ${confirmedEvidences.map((ev, i) =>
                     {/* Блок подтверждения (если нужно) */}
                     {needsConfirmation && (
                       <div className="p-6 bg-gradient-to-r from-blue-600 to-blue-700 border-b border-white/10">
-                        <h3 className="text-lg font-black uppercase tracking-tight mb-2">💰 Расчёт готов</h3>
+                        <h3 className="text-lg font-black uppercase tracking-tight mb-2">Расчёт готов</h3>
                         
                         {currentQuote && (
                           <div className="bg-white/10 rounded-2xl p-4 mb-4">
@@ -790,8 +1220,8 @@ ${confirmedEvidences.map((ev, i) =>
                               )}
                             </div>
                             <div className="mt-3 pt-3 border-t border-white/20 flex justify-between items-center">
-                              <span className="text-[10px] uppercase opacity-80">Ориентировочно:</span>
-                              <span className="text-xl font-black">{formatPrice(currentQuote.estimatedTotal)}</span>
+                              <span className="text-[10px] uppercase opacity-80">Ориентировочно (с НДС 22%):</span>
+                              <span className="text-xl font-black">{formatPrice(currentQuote.estimatedTotal * 1.22)}</span>
                             </div>
                             {currentQuote.notes?.trim() && (
                               <div className="mt-3 pt-3 border-t border-white/20 text-[10px] text-blue-100">
@@ -807,13 +1237,13 @@ ${confirmedEvidences.map((ev, i) =>
                             onClick={() => handleConfirmOrder(order.id)}
                             className="flex-1 bg-white text-slate-900 py-4 rounded-2xl text-[11px] font-black uppercase tracking-widest shadow-xl hover:scale-[1.02] transition-all"
                           >
-                            ✅ Подтвердить условия
+                            Подтвердить условия
                           </button>
                           <button 
                             onClick={() => handleConfirmOrder(order.id, true)}
                             className="bg-orange-500 text-white px-6 py-4 rounded-2xl text-[10px] font-black uppercase shadow-lg hover:bg-orange-400 transition-all"
                           >
-                            🚀 СРОЧНО
+                            СРОЧНО
                           </button>
                         </div>
                         {currentQuote && (
@@ -826,7 +1256,7 @@ ${confirmedEvidences.map((ev, i) =>
                               }}
                               className="w-full bg-white/10 text-white py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-white/20 transition-all"
                             >
-                              👀 Предпросмотр КП
+                              Предпросмотр КП
                             </button>
                             <button
                               type="button"
@@ -834,7 +1264,7 @@ ${confirmedEvidences.map((ev, i) =>
                               disabled={isProcessingDoc === 'quote'}
                               className="w-full bg-white text-slate-900 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-white/90 transition-all disabled:opacity-50"
                             >
-                              {isProcessingDoc === 'quote' ? 'Генерация...' : '⬇ Скачать КП'}
+                              {isProcessingDoc === 'quote' ? 'Генерация...' : 'Скачать КП'}
                             </button>
                             <button
                               type="button"
@@ -842,7 +1272,7 @@ ${confirmedEvidences.map((ev, i) =>
                               disabled={isProcessingDoc === 'invoice'}
                               className="w-full bg-white/10 text-white py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-white/20 transition-all disabled:opacity-50"
                             >
-                              {isProcessingDoc === 'invoice' ? 'Генерация...' : '🧾 Скачать счёт'}
+                              {isProcessingDoc === 'invoice' ? 'Генерация...' : 'Скачать счёт'}
                             </button>
                             <button
                               type="button"
@@ -850,7 +1280,7 @@ ${confirmedEvidences.map((ev, i) =>
                               disabled={isProcessingDoc === 'contract'}
                               className="w-full bg-white/10 text-white py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-white/20 transition-all disabled:opacity-50"
                             >
-                              {isProcessingDoc === 'contract' ? 'Генерация...' : '📄 Скачать договор'}
+                              {isProcessingDoc === 'contract' ? 'Генерация...' : 'Скачать договор'}
                             </button>
                           </div>
                         )}
@@ -879,7 +1309,11 @@ ${confirmedEvidences.map((ev, i) =>
                       </div>
                       <div className="bg-white/5 p-4 rounded-2xl">
                         <div className="text-[9px] font-black text-slate-500 uppercase mb-1">Сумма</div>
-                        <div className="text-xl font-black text-green-400">{formatPrice(totals.grandTotal)}</div>
+                        <div className="text-xl font-black text-green-400">
+                          {formatPrice(totals.actualTotal > 0 ? totals.actualTotal : totals.grandTotal)}
+                        </div>
+                        <div className="text-[9px] text-slate-500">План: {formatPrice(totals.plannedTotal)}</div>
+                        <div className="text-[9px] text-emerald-300">Факт: {formatPrice(totals.actualTotal)}</div>
                       </div>
                     </div>
 
@@ -888,11 +1322,11 @@ ${confirmedEvidences.map((ev, i) =>
                         <div className="text-[10px] font-black text-slate-500 uppercase mb-3">Фото рейсов</div>
                         {(() => {
                           const photoTypeLabels: Record<string, string> = {
-                            loading: '📦 Погрузка',
-                            full_truck: '🚛 Полный кузов',
-                            unloading: '📤 Выгрузка',
-                            ticket: '🎫 Талон',
-                            other: '📸 Фото'
+                            loading: 'Погрузка',
+                            full_truck: 'Полный кузов',
+                            unloading: 'Выгрузка',
+                            ticket: 'Талон',
+                            other: 'Фото'
                           };
                           const photos = getCustomerEvidences(order)
                             .slice()
@@ -960,11 +1394,11 @@ ${confirmedEvidences.map((ev, i) =>
                               {(order.status === OrderStatus.CLOSING_DOCS_SENT || order.status === OrderStatus.REPORT_READY || order.status === OrderStatus.COMPLETED) && (
                                 <button
                                   type="button"
-                                  onClick={() => generateReport(order, 'act')}
+                                  onClick={() => downloadClosingDocs(order)}
                                   disabled={isProcessingDoc === 'act'}
-                                  className="flex-1 bg-slate-600/20 text-slate-200 text-center py-3 rounded-xl text-[10px] font-black uppercase border border-slate-500/40 hover:bg-slate-500 hover:text-white transition-all disabled:opacity-50"
+                                  className={`flex-1 ${isClosingDocsPriority ? 'flex-[1.5] bg-amber-400 text-slate-900 border-amber-200 shadow-[0_0_30px_rgba(251,191,36,0.35)] animate-pulse' : 'bg-slate-600/20 text-slate-200 border-slate-500/40 hover:bg-slate-500 hover:text-white'} text-center py-3 rounded-xl text-[10px] font-black uppercase border transition-all disabled:opacity-50`}
                                 >
-                                  {isProcessingDoc === 'act' ? 'Генерация...' : '📎 Скачать закрывающие'}
+                                  {isProcessingDoc === 'act' ? 'Генерация...' : 'Скачать закрывающие документы'}
                                 </button>
                               )}
                               <button
@@ -972,14 +1406,14 @@ ${confirmedEvidences.map((ev, i) =>
                                 onClick={() => shareToMessenger(order, 'telegram')}
                                 className="flex-1 bg-blue-600/20 text-blue-300 text-center py-3 rounded-xl text-[10px] font-black uppercase border border-blue-500/40 hover:bg-blue-500 hover:text-white transition-all"
                               >
-                                📤 Telegram
+                                Telegram
                               </button>
                               <button
                                 type="button"
                                 onClick={() => shareToMessenger(order, 'whatsapp')}
                                 className="flex-1 bg-green-600/20 text-green-300 text-center py-3 rounded-xl text-[10px] font-black uppercase border border-green-500/40 hover:bg-green-500 hover:text-white transition-all"
                               >
-                                💬 WhatsApp
+                                WhatsApp
                               </button>
                             </>
                           ) : (
@@ -989,14 +1423,14 @@ ${confirmedEvidences.map((ev, i) =>
                                 onClick={() => generateReport(order, 'invoice')}
                                 className="flex-1 bg-green-600/20 text-green-300 text-center py-3 rounded-xl text-[10px] font-black uppercase border border-green-500/40 hover:bg-green-500 hover:text-white transition-all"
                               >
-                                💾 Скачать счёт
+                                Скачать счёт
                               </button>
                               <button
                                 type="button"
                                 onClick={() => generateReport(order, 'contract')}
                                 className="flex-1 bg-emerald-600/15 text-emerald-300 text-center py-3 rounded-xl text-[10px] font-black uppercase border border-emerald-500/40 hover:bg-emerald-500 hover:text-white transition-all"
                               >
-                                📄 Скачать договор
+                                Скачать договор
                               </button>
                             </>
                           )}
@@ -1007,20 +1441,109 @@ ${confirmedEvidences.map((ev, i) =>
                               className="hidden"
                               onChange={e => handleUploadPayment(order.id, e.target.files?.[0] || null)}
                             />
-                            {order.paymentReceiptUrl ? '✅ Платёжка загружена' : '⬆ Загрузить платёжку'}
+                            {order.paymentReceiptUrl ? 'Платёжка загружена' : 'Загрузить платёжку'}
                           </label>
                         </div>
                       )}
 
-                      <div className="flex-1 flex gap-3">
-                        <a href={`tel:+70000000000`} className="flex-1 bg-white/10 text-white text-center py-3 rounded-xl text-[10px] font-black uppercase hover:bg-white/20 transition-all">
-                          📞 Позвонить
+                      <div className="flex-1 flex flex-wrap gap-3">
+                        <a href={`tel:+70000000000`} className="flex-1 min-w-[100px] bg-white/10 text-white text-center py-3 rounded-xl text-[10px] font-black uppercase hover:bg-white/20 transition-all">
+                          Позвонить
                         </a>
-                        <button className="flex-1 bg-blue-600/20 text-blue-400 text-center py-3 rounded-xl text-[10px] font-black uppercase border border-blue-500/20 hover:bg-blue-600 hover:text-white transition-all">
-                          💬 Написать
+                        <button
+                          type="button"
+                          onClick={() => openManagerChat(order)}
+                          className={`flex-1 min-w-[100px] text-center py-3 rounded-xl text-[10px] font-black uppercase border transition-all ${
+                            unreadManagerCount > 0
+                              ? 'bg-emerald-600 text-white border-emerald-500 animate-pulse'
+                              : 'bg-emerald-600/20 text-emerald-400 border-emerald-500/20 hover:bg-emerald-600 hover:text-white'
+                          }`}
+                        >
+                          {unreadManagerCount > 0 && <span className="mr-1">💬</span>}
+                          Написать менеджеру
+                          {unreadManagerCount > 0 && <span className="ml-1 bg-white/20 px-1.5 rounded">+{unreadManagerCount}</span>}
                         </button>
+                        {[OrderStatus.AWAITING_CLOSING_DOCS, OrderStatus.CLOSING_DOCS_SENT, OrderStatus.REPORT_READY, OrderStatus.COMPLETED].includes(order.status) && (
+                          <button
+                            type="button"
+                            onClick={() => openAccountantChat(order)}
+                            className="flex-1 min-w-[100px] bg-blue-600/20 text-blue-400 text-center py-3 rounded-xl text-[10px] font-black uppercase border border-blue-500/20 hover:bg-blue-600 hover:text-white transition-all"
+                          >
+                            Написать бухгалтеру
+                          </button>
+                        )}
                       </div>
                     </div>
+                    {/* Последнее сообщение от менеджера */}
+                    {managerMessages.length > 0 && (
+                      <div className="p-4 border-t border-white/5 bg-white/[0.02]">
+                        <div className="flex items-center justify-between gap-3 mb-3">
+                          <div className="text-[9px] font-black uppercase tracking-widest text-emerald-300">
+                            {unreadManagerCount > 0 ? '💬 Новые сообщения от менеджера' : 'Сообщения менеджера'}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => openManagerChat(order)}
+                            className="px-3 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 text-[9px] font-black uppercase border border-emerald-400/30 hover:bg-emerald-500/30 transition-all"
+                          >
+                            Ответить
+                          </button>
+                        </div>
+                        <div className="bg-white/5 rounded-xl p-3">
+                          {(() => {
+                            const lastMsg = managerMessages[managerMessages.length - 1];
+                            return (
+                              <>
+                                <div className="text-[9px] text-slate-500 mb-1">
+                                  {lastMsg.fromName || 'Диспетчер'} • {formatDateTime(lastMsg.timestamp)}
+                                </div>
+                                <div className="text-sm text-slate-200 whitespace-pre-wrap line-clamp-2">{lastMsg.text}</div>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    )}
+                    {accountantMessages.length > 0 && (
+                      <div className="p-4 border-t border-white/5 bg-white/[0.02]">
+                        <div className="flex items-center justify-between gap-3 mb-3">
+                          <div className="text-[9px] font-black uppercase tracking-widest text-amber-200">
+                            Сообщения бухгалтера
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => openAccountantChat(order)}
+                            className="px-3 py-1 rounded-lg bg-amber-500/20 text-amber-200 text-[9px] font-black uppercase border border-amber-400/30 hover:bg-amber-500/30 transition-all"
+                          >
+                            Ответить
+                          </button>
+                        </div>
+                        <div className="space-y-2">
+                          {accountantMessages.map(msg => (
+                            <div key={msg.id} className="bg-white/5 rounded-xl p-3">
+                              <div className="text-[9px] text-slate-500 mb-1">
+                                {msg.fromName} • {formatDateTime(msg.timestamp)}
+                              </div>
+                              <div className="text-sm text-slate-200 whitespace-pre-wrap">{msg.text}</div>
+                              {msg.attachments?.length ? (
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {msg.attachments.map((att, idx) => (
+                                    <button
+                                      key={`${msg.id}-${idx}`}
+                                      type="button"
+                                      onClick={() => downloadAttachment(att)}
+                                      className="px-3 py-1 rounded-lg bg-amber-500/20 text-amber-200 text-[9px] font-black uppercase border border-amber-400/30 hover:bg-amber-500/30 transition-all"
+                                    >
+                                      Документ: {att.name || `Документ ${idx + 1}`}
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })
@@ -1174,7 +1697,7 @@ ${confirmedEvidences.map((ev, i) =>
                   type="submit" 
                   className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white p-5 rounded-2xl text-[12px] font-black uppercase tracking-widest shadow-2xl border-b-4 border-blue-800 transition-all active:scale-[0.98] mt-6"
                 >
-                  📤 Отправить заявку
+                  Отправить заявку
                 </button>
               </div>
             </div>
@@ -1186,7 +1709,7 @@ ${confirmedEvidences.map((ev, i) =>
           <div className="space-y-6 animate-in slide-in-from-right-4 duration-500">
             {filteredCompletedOrders.length === 0 ? (
               <div className="text-center py-24 bg-[#12192c]/40 rounded-[3rem] border border-white/5 border-dashed">
-                <div className="text-6xl mb-6 opacity-20">📜</div>
+                <div className="text-6xl mb-6 opacity-20">📁</div>
                 <p className="text-sm font-black uppercase tracking-[0.3em] text-slate-500">История пуста</p>
               </div>
             ) : (
@@ -1199,7 +1722,7 @@ ${confirmedEvidences.map((ev, i) =>
                       <div>
                         <div className="flex items-center gap-3 mb-2">
                           <span className="text-[10px] font-black text-green-400 bg-green-500/10 px-3 py-1 rounded-full uppercase">
-                            ✓ Выполнено
+                            Выполнено
                           </span>
                           <span className="text-[9px] font-black text-slate-500">
                             #{order.orderNumber || order.id.slice(0, 8)}
@@ -1209,28 +1732,24 @@ ${confirmedEvidences.map((ev, i) =>
                         <p className="text-[10px] text-slate-500 mt-1">{formatDateTime(order.createdAt)}</p>
                       </div>
                       <div className="text-right">
-                        <div className="text-2xl font-black text-green-400">{formatPrice(totals.grandTotal)}</div>
+                        <div className="text-2xl font-black text-green-400">
+                          {formatPrice(totals.actualTotal > 0 ? totals.actualTotal : totals.grandTotal)}
+                        </div>
+                        <div className="text-[9px] text-slate-500">План: {formatPrice(totals.plannedTotal)}</div>
+                        <div className="text-[9px] text-emerald-300">Факт: {formatPrice(totals.actualTotal)}</div>
                         <div className="text-[9px] text-slate-500">{totals.totalTrips} рейсов</div>
                       </div>
                     </div>
 
                     {/* Документы */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
                       <button 
-                        onClick={() => generateReport(order, 'act')}
+                        onClick={() => downloadClosingDocs(order)}
                         disabled={isProcessingDoc === 'act'}
                         className="bg-white/5 hover:bg-white/10 p-4 rounded-xl text-center transition-all border border-white/5 disabled:opacity-50"
                       >
                         <span className="text-2xl block mb-1">📄</span>
-                        <span className="text-[9px] font-black uppercase">{isProcessingDoc === 'act' ? 'Генерация...' : 'Акт'}</span>
-                      </button>
-                      <button 
-                        onClick={() => generateReport(order, 'invoice')}
-                        disabled={isProcessingDoc === 'invoice'}
-                        className="bg-white/5 hover:bg-white/10 p-4 rounded-xl text-center transition-all border border-white/5 disabled:opacity-50"
-                      >
-                        <span className="text-2xl block mb-1">🧾</span>
-                        <span className="text-[9px] font-black uppercase">{isProcessingDoc === 'invoice' ? 'Генерация...' : 'Счёт'}</span>
+                        <span className="text-[9px] font-black uppercase">{isProcessingDoc === 'act' ? 'Генерация...' : 'Закрывающие'}</span>
                       </button>
                       <button 
                         onClick={() => generateReport(order, 'full')}
@@ -1256,19 +1775,19 @@ ${confirmedEvidences.map((ev, i) =>
                         onClick={() => shareToMessenger(order, 'telegram')}
                         className="flex-1 bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white py-3 rounded-xl text-[10px] font-black uppercase transition-all flex items-center justify-center gap-2"
                       >
-                        ✈️ Telegram
+                        Telegram
                       </button>
                       <button 
                         onClick={() => shareToMessenger(order, 'whatsapp')}
                         className="flex-1 bg-green-600/20 hover:bg-green-600 text-green-400 hover:text-white py-3 rounded-xl text-[10px] font-black uppercase transition-all flex items-center justify-center gap-2"
                       >
-                        💬 WhatsApp
+                        WhatsApp
                       </button>
                       <button 
                         onClick={() => shareToMessenger(order, 'email')}
                         className="flex-1 bg-white/5 hover:bg-white/10 text-slate-400 py-3 rounded-xl text-[10px] font-black uppercase transition-all flex items-center justify-center gap-2"
                       >
-                        ✉️ Email
+                        Email
                       </button>
                     </div>
 
@@ -1336,14 +1855,14 @@ ${confirmedEvidences.map((ev, i) =>
                           onClick={() => { setSelectedOrderId(order.id); setShowFeedbackModal(true); }}
                           className="flex-1 bg-yellow-600/20 hover:bg-yellow-600 text-yellow-400 hover:text-white py-3 rounded-xl text-[10px] font-black uppercase transition-all"
                         >
-                          ⭐ Оставить отзыв
+                          Оставить отзыв
                         </button>
                       )}
                       <button 
                         onClick={() => repeatOrder(order)}
                         className="bg-white/5 hover:bg-blue-600 text-slate-400 hover:text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase transition-all"
                       >
-                        🔄 Повторить
+                        Повторить
                       </button>
                     </div>
                   </div>
@@ -1447,7 +1966,7 @@ ${confirmedEvidences.map((ev, i) =>
                 disabled={isProcessingDoc === 'quote'}
                 className="bg-white text-slate-900 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-white/90 transition-all disabled:opacity-50"
               >
-                {isProcessingDoc === 'quote' ? 'Генерация...' : '⬇ Скачать КП'}
+                {isProcessingDoc === 'quote' ? 'Генерация...' : 'Скачать КП'}
               </button>
               <button
                 type="button"
@@ -1455,7 +1974,7 @@ ${confirmedEvidences.map((ev, i) =>
                 disabled={isProcessingDoc === 'invoice'}
                 className="bg-slate-100 text-slate-900 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all disabled:opacity-50"
               >
-                {isProcessingDoc === 'invoice' ? 'Генерация...' : '🧾 Скачать счёт'}
+                {isProcessingDoc === 'invoice' ? 'Генерация...' : 'Скачать счёт'}
               </button>
               <button
                 type="button"
@@ -1463,7 +1982,7 @@ ${confirmedEvidences.map((ev, i) =>
                 disabled={isProcessingDoc === 'contract'}
                 className="bg-slate-100 text-slate-900 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all disabled:opacity-50"
               >
-                {isProcessingDoc === 'contract' ? 'Генерация...' : '📄 Скачать договор'}
+                {isProcessingDoc === 'contract' ? 'Генерация...' : 'Скачать договор'}
               </button>
               <button
                 type="button"
@@ -1480,10 +1999,140 @@ ${confirmedEvidences.map((ev, i) =>
         </div>
       )}
 
+      {accountantChatModal.isOpen && chatOrder && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-50 p-4">
+          <div className="bg-[#12192c] rounded-3xl p-6 max-w-lg w-full shadow-2xl border border-white/10">
+            <h3 className="text-lg font-black uppercase tracking-tight mb-2">
+              Переписка с бухгалтером
+            </h3>
+            <p className="text-[10px] text-slate-500 uppercase mb-4">
+              Заказ: {chatOrder.address}
+            </p>
+
+            <div ref={accountantChatRef} className="space-y-2 max-h-64 overflow-y-auto mb-4 pr-1">
+              {chatMessages.length === 0 ? (
+                <div className="text-center text-slate-500 text-[10px] uppercase py-6">
+                  Сообщений пока нет
+                </div>
+              ) : (
+                chatMessages.map(msg => {
+                  const isMine = msg.fromRole === 'customer';
+                  return (
+                    <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[75%] rounded-2xl p-3 ${isMine ? 'bg-blue-600 text-white' : 'bg-white/10 text-slate-200'}`}>
+                        <div className={`text-[9px] mb-1 ${isMine ? 'text-blue-100' : 'text-slate-400'}`}>
+                          {isMine ? 'Вы' : 'Бухгалтер'} • {formatDateTime(msg.timestamp)}
+                        </div>
+                        <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <textarea
+              value={accountantChatModal.message}
+              onChange={e => setAccountantChatModal(prev => ({ ...prev, message: e.target.value }))}
+              placeholder="Напишите бухгалтеру..."
+              rows={3}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+            />
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setAccountantChatModal({ isOpen: false, order: null, message: '' })}
+                className="flex-1 bg-white/10 text-white py-4 min-h-[48px] rounded-xl text-[11px] font-black uppercase touch-feedback active:scale-95"
+              >
+                Закрыть
+              </button>
+              <button
+                type="button"
+                onClick={sendAccountantMessage}
+                disabled={!accountantChatModal.message.trim()}
+                className={`flex-1 py-4 min-h-[48px] rounded-xl text-[11px] font-black uppercase touch-feedback active:scale-95 ${
+                  accountantChatModal.message.trim()
+                    ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                    : 'bg-white/10 text-slate-500 cursor-not-allowed'
+                }`}
+              >
+                Отправить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {managerChatModal.isOpen && managerChatOrder && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-50 p-4">
+          <div className="bg-[#12192c] rounded-3xl p-6 max-w-lg w-full shadow-2xl border border-white/10">
+            <h3 className="text-lg font-black uppercase tracking-tight mb-2">
+              Переписка с менеджером
+            </h3>
+            <p className="text-[10px] text-slate-500 uppercase mb-4">
+              Заказ: {managerChatOrder.address}
+            </p>
+
+            <div ref={managerChatRef} className="space-y-2 max-h-64 overflow-y-auto mb-4 pr-1">
+              {managerChatMessages.length === 0 ? (
+                <div className="text-center text-slate-500 text-[10px] uppercase py-6">
+                  Сообщений пока нет
+                </div>
+              ) : (
+                managerChatMessages.map(msg => {
+                  const isMine = msg.fromRole === 'customer';
+                  return (
+                    <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[75%] rounded-2xl p-3 ${isMine ? 'bg-emerald-600 text-white' : 'bg-white/10 text-slate-200'}`}>
+                        <div className={`text-[9px] mb-1 ${isMine ? 'text-emerald-100' : 'text-slate-400'}`}>
+                          {isMine ? 'Вы' : 'Менеджер'} • {formatDateTime(msg.timestamp)}
+                        </div>
+                        <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <textarea
+              value={managerChatModal.message}
+              onChange={e => setManagerChatModal(prev => ({ ...prev, message: e.target.value }))}
+              placeholder="Напишите менеджеру..."
+              rows={3}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500 mb-4"
+            />
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setManagerChatModal({ isOpen: false, order: null, message: '' })}
+                className="flex-1 bg-white/10 text-white py-4 min-h-[48px] rounded-xl text-[11px] font-black uppercase touch-feedback active:scale-95"
+              >
+                Закрыть
+              </button>
+              <button
+                type="button"
+                onClick={sendManagerMessage}
+                disabled={!managerChatModal.message.trim()}
+                className={`flex-1 py-4 min-h-[48px] rounded-xl text-[11px] font-black uppercase touch-feedback active:scale-95 ${
+                  managerChatModal.message.trim()
+                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                    : 'bg-white/10 text-slate-500 cursor-not-allowed'
+                }`}
+              >
+                Отправить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showFeedbackModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-50 p-4">
           <div className="bg-[#12192c] rounded-3xl p-8 max-w-md w-full shadow-2xl border border-white/10">
-            <h3 className="text-xl font-black uppercase tracking-tight mb-6 text-center">⭐ Оцените работу</h3>
+            <h3 className="text-xl font-black uppercase tracking-tight mb-6 text-center">Оцените работу</h3>
             
             <div className="flex justify-center gap-2 mb-6">
               {[1, 2, 3, 4, 5].map(star => (
@@ -1526,4 +2175,15 @@ ${confirmedEvidences.map((ev, i) =>
 };
 
 export default CustomerPortal;
+
+
+
+
+
+
+
+
+
+
+
 

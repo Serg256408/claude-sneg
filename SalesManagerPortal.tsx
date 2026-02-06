@@ -47,15 +47,27 @@ export default function SalesManagerPortal({
   const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all'>('all');
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [showLeadForm, setShowLeadForm] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
-  // Фильтрация лидов по менеджеру и статусу
+  // Фильтрация лидов по менеджеру, статусу и поиску
   const myLeads = useMemo(() => {
+    const query = searchQuery.toLowerCase().trim();
     return leads.filter(l => {
       if (l.assignedManagerId && l.assignedManagerId !== currentManagerId) return false;
       if (statusFilter !== 'all' && l.status !== statusFilter) return false;
+      if (query) {
+        const searchFields = [
+          l.customerName,
+          l.customerPhone,
+          l.customerEmail,
+          l.address,
+          l.description
+        ].filter(Boolean).join(' ').toLowerCase();
+        if (!searchFields.includes(query)) return false;
+      }
       return true;
     });
-  }, [leads, currentManagerId, statusFilter]);
+  }, [leads, currentManagerId, statusFilter, searchQuery]);
 
   // Мои заказы (где я менеджер)
   const myOrders = useMemo(() => {
@@ -203,18 +215,37 @@ export default function SalesManagerPortal({
       {/* Список лидов */}
       {activeTab === 'leads' && (
         <div className="bg-white rounded-[2rem] border border-slate-200 p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-black">Лиды</h2>
-            <select
-              className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-              value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value as LeadStatus | 'all')}
-            >
-              <option value="all">Все статусы</option>
-              {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
-                <option key={key} value={key}>{label}</option>
-              ))}
-            </select>
+          <div className="flex flex-col gap-3 mb-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-black">Лиды</h2>
+              <select
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value as LeadStatus | 'all')}
+              >
+                <option value="all">Все статусы</option>
+                {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="🔍 Поиск по имени, телефону, адресу..."
+                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="space-y-3">

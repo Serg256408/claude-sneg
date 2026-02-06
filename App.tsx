@@ -15,6 +15,7 @@ import {
   Contractor,
   Customer,
   DEFAULT_MANAGERS,
+  Message,
   DriverAssignment,
   DateRange,
   ManagerName,
@@ -28,7 +29,10 @@ import {
   isOrderInDateRange,
   normalizeOrderStatus,
   calculateOrderTotals,
+  isLoaderType,
+  isTruckType,
   toLocalDateTimeInputValue,
+  PriceUnit,
   PaymentType,
   // Новые типы
   UserRole,
@@ -87,6 +91,49 @@ function safeJsonParse<T>(raw: string | null, fallback: T): T {
     return fallback;
   }
 }
+
+const trySetLocalStorage = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const safeJsonStringify = (value: unknown) => {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
+};
+
+const shouldStoreUrl = (url?: string) => {
+  if (!url) return false;
+  if (url.startsWith('data:')) return false;
+  return url.length < 5000;
+};
+
+const sanitizeOrdersForStorage = (orders: Order[]) => {
+  return orders.map(order => ({
+    ...order,
+    evidences: (order.evidences || []).map(ev => ({
+      ...ev,
+      photos: (ev.photos || []).filter(photo => shouldStoreUrl(photo?.url))
+    })),
+    closingDocs: order.closingDocs
+      ? {
+          ...order.closingDocs,
+          attachments: (order.closingDocs.attachments || []).filter(att => shouldStoreUrl(att?.url))
+        }
+      : order.closingDocs,
+    messages: (order.messages || []).map(msg => ({
+      ...msg,
+      attachments: (msg.attachments || []).filter(att => shouldStoreUrl(att?.url))
+    }))
+  }));
+};
 
 function seedCustomers(): Customer[] {
   const now = new Date().toISOString();
@@ -242,15 +289,39 @@ function normalizeContractor(raw: Partial<Contractor>): Contractor {
   };
 }
 
+const toArray = <T,>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
+
 function normalizeOrderDates(order: Order): Order {
   const createdAt = order.createdAt || new Date().toISOString();
   const updatedAt = order.updatedAt || createdAt;
   const scheduledTime = order.scheduledTime || toLocalDateTimeInputValue(new Date(createdAt));
+  const messages = toArray<Message>(order.messages).map(msg => ({
+    ...msg,
+    attachments: toArray(msg.attachments)
+  }));
+  const closingDocs = order.closingDocs && typeof order.closingDocs === 'object'
+    ? {
+        ...order.closingDocs,
+        attachments: toArray(order.closingDocs.attachments)
+      }
+    : undefined;
+
   return {
     ...order,
     createdAt,
     updatedAt,
-    scheduledTime
+    scheduledTime,
+    assetRequirements: toArray(order.assetRequirements),
+    bids: toArray(order.bids),
+    assignments: toArray(order.assignments),
+    assignedDrivers: toArray(order.assignedDrivers),
+    driverDetails: toArray(order.driverDetails),
+    applicants: toArray(order.applicants),
+    evidences: toArray(order.evidences),
+    messages,
+    invoices: toArray(order.invoices),
+    payments: toArray(order.payments),
+    closingDocs
   };
 }
 
@@ -569,23 +640,44 @@ export default function App() {
   });
   const [currentManager, setCurrentManager] = useState<ManagerName>(() => (localStorage.getItem(LS_KEYS.manager) as ManagerName) || DEFAULT_MANAGERS[0]);
 
-  const [customers, setCustomers] = useState<Customer[]>(() =>
-    safeJsonParse(localStorage.getItem(LS_KEYS.customers), seedCustomers()).map(normalizeCustomer)
-  );
-  const [contractors, setContractors] = useState<Contractor[]>(() =>
-    safeJsonParse(localStorage.getItem(LS_KEYS.contractors), seedContractors()).map(normalizeContractor)
-  );
-  const [orders, setOrders] = useState<Order[]>(() =>
-    safeJsonParse(localStorage.getItem(LS_KEYS.orders), seedOrders(seedCustomers())).map(normalizeOrderDates)
-  );
+  const [customers, setCustomers] = useState<Customer[]>(() => {
+    const rawCustomers = safeJsonParse(localStorage.getItem(LS_KEYS.customers), seedCustomers());
+    const list = Array.isArray(rawCustomers) ? rawCustomers : seedCustomers();
+    return list.map(normalizeCustomer);
+  });
+  const [contractors, setContractors] = useState<Contractor[]>(() => {
+    const rawContractors = safeJsonParse(localStorage.getItem(LS_KEYS.contractors), seedContractors());
+    const list = Array.isArray(rawContractors) ? rawContractors : seedContractors();
+    return list.map(normalizeContractor);
+  });
+  const [orders, setOrders] = useState<Order[]>(() => {
+    const rawOrders = safeJsonParse(localStorage.getItem(LS_KEYS.orders), seedOrders(seedCustomers()));
+    const list = Array.isArray(rawOrders) ? rawOrders : seedOrders(seedCustomers());
+    return list.map(normalizeOrderDates);
+  });
 
   // Новые состояния
-  const [leads, setLeads] = useState<Lead[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.leads), seedLeads()));
-  const [users, setUsers] = useState<User[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.users), seedUsers()));
-  const [companies, setCompanies] = useState<Company[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.companies), seedCompanies()));
-  const [priceBook, setPriceBook] = useState<PriceBookItem[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.priceBook), seedPriceBook()));
+  const [leads, setLeads] = useState<Lead[]>(() => {
+    const raw = safeJsonParse(localStorage.getItem(LS_KEYS.leads), seedLeads());
+    return Array.isArray(raw) ? raw : seedLeads();
+  });
+  const [users, setUsers] = useState<User[]>(() => {
+    const raw = safeJsonParse(localStorage.getItem(LS_KEYS.users), seedUsers());
+    return Array.isArray(raw) ? raw : seedUsers();
+  });
+  const [companies, setCompanies] = useState<Company[]>(() => {
+    const raw = safeJsonParse(localStorage.getItem(LS_KEYS.companies), seedCompanies());
+    return Array.isArray(raw) ? raw : seedCompanies();
+  });
+  const [priceBook, setPriceBook] = useState<PriceBookItem[]>(() => {
+    const raw = safeJsonParse(localStorage.getItem(LS_KEYS.priceBook), seedPriceBook());
+    return Array.isArray(raw) ? raw : seedPriceBook();
+  });
   const [commissionSettings, setCommissionSettings] = useState<CommissionSettings | null>(() => safeJsonParse(localStorage.getItem(LS_KEYS.commissionSettings), null));
-  const [vehicles, setVehicles] = useState<Vehicle[]>(() => safeJsonParse(localStorage.getItem(LS_KEYS.vehicles), seedVehicles()));
+  const [vehicles, setVehicles] = useState<Vehicle[]>(() => {
+    const raw = safeJsonParse(localStorage.getItem(LS_KEYS.vehicles), seedVehicles());
+    return Array.isArray(raw) ? raw : seedVehicles();
+  });
 
   const [view, setView] = useState<'dashboard' | 'order-form' | 'customer-form' | 'contractor-form' | 'customers' | 'contractors'>('dashboard');
   const [editingOrder, setEditingOrder] = useState<Order | undefined>(undefined);
@@ -596,6 +688,7 @@ export default function App() {
   const [selectedMapOrder, setSelectedMapOrder] = useState<Order | null>(null);
   const [orderSearch, setOrderSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | OrderStatus>('all');
+  const [showCompleted, setShowCompleted] = useState(false);
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -613,7 +706,15 @@ export default function App() {
 
   useEffect(() => localStorage.setItem(LS_KEYS.customers, JSON.stringify(customers)), [customers]);
   useEffect(() => localStorage.setItem(LS_KEYS.contractors, JSON.stringify(contractors)), [contractors]);
-  useEffect(() => localStorage.setItem(LS_KEYS.orders, JSON.stringify(orders)), [orders]);
+  useEffect(() => {
+    const raw = safeJsonStringify(orders);
+    if (raw && trySetLocalStorage(LS_KEYS.orders, raw)) return;
+    const sanitized = sanitizeOrdersForStorage(orders);
+    const sanitizedRaw = safeJsonStringify(sanitized);
+    if (sanitizedRaw) {
+      trySetLocalStorage(LS_KEYS.orders, sanitizedRaw);
+    }
+  }, [orders]);
   // Сохранение новых состояний
   useEffect(() => localStorage.setItem(LS_KEYS.leads, JSON.stringify(leads)), [leads]);
   useEffect(() => localStorage.setItem(LS_KEYS.users, JSON.stringify(users)), [users]);
@@ -621,6 +722,15 @@ export default function App() {
   useEffect(() => localStorage.setItem(LS_KEYS.priceBook, JSON.stringify(priceBook)), [priceBook]);
   useEffect(() => { if (commissionSettings) localStorage.setItem(LS_KEYS.commissionSettings, JSON.stringify(commissionSettings)); }, [commissionSettings]);
   useEffect(() => localStorage.setItem(LS_KEYS.vehicles, JSON.stringify(vehicles)), [vehicles]);
+
+  const resetOrdersAndTrips = useCallback(() => {
+    const confirmed = window.confirm('Сбросить все заказы и рейсы? Данные будут удалены.');
+    if (!confirmed) return;
+    setOrders([]);
+    trySetLocalStorage(LS_KEYS.orders, JSON.stringify([]));
+    setSelectedMapOrder(null);
+    setView('dashboard');
+  }, []);
 
   const dateRange = useMemo<DateRange>(() => ({
     from: dateFrom || undefined,
@@ -633,10 +743,17 @@ export default function App() {
     return customers.filter(c => c.name.toLowerCase().includes(term));
   }, [customers, customerFilterText]);
 
+  const managerOrders = useMemo(() => {
+    if (role !== 'dispatcher') return orders;
+    return orders.filter(o => o.managerName === currentManager);
+  }, [orders, role, currentManager]);
+
   const filteredOrders = useMemo(() => {
     const term = orderSearch.trim().toLowerCase();
     const customerTerm = customerFilterText.trim().toLowerCase();
-    const list = orders.filter(o => {
+    const list = managerOrders.filter(o => {
+      const isClosed = [OrderStatus.COMPLETED, OrderStatus.CANCELLED].includes(o.status as OrderStatus);
+      if (!showCompleted && isClosed) return false;
       if (statusFilter !== 'all' && o.status !== statusFilter) return false;
       if (customerFilterId && o.customerId !== customerFilterId) return false;
       if (!customerFilterId && customerTerm && !o.customer.toLowerCase().includes(customerTerm)) return false;
@@ -653,7 +770,7 @@ export default function App() {
       const delta = getOrderSortTimestamp(a) - getOrderSortTimestamp(b);
       return sortOrder === 'newest' ? -delta : delta;
     });
-  }, [orders, orderSearch, statusFilter, customerFilterId, customerFilterText, dateRange, sortOrder]);
+  }, [managerOrders, orderSearch, statusFilter, customerFilterId, customerFilterText, dateRange, sortOrder]);
 
   const hasFilters = Boolean(
     orderSearch.trim() ||
@@ -661,7 +778,8 @@ export default function App() {
     dateFrom ||
     dateTo ||
     statusFilter !== 'all' ||
-    sortOrder !== 'newest'
+    sortOrder !== 'newest' ||
+    showCompleted
   );
 
   const filteredCustomers = useMemo(() => {
@@ -761,7 +879,7 @@ export default function App() {
         totalContractorPrice = merged.currentEstimate.totalCost;
         grossProfit = merged.currentEstimate.grossProfit;
       } else {
-        const totals = calculateOrderTotals(merged, { mode: 'actual_or_planned', includeCharges: true });
+        const totals = calculateOrderTotals(merged, { mode: 'actual_or_planned', includeCharges: true, contractorMode: 'actual' });
         totalCustomerPrice = totals.customerTotal;
         totalContractorPrice = totals.contractorTotal;
         grossProfit = totals.margin;
@@ -850,6 +968,13 @@ export default function App() {
     setContractors(prev => prev.map(c => (c.id === contractor.id ? contractor : c)));
   }, []);
 
+  const isSameAssetGroup = useCallback((left: AssetType, right: AssetType) => {
+    if (left === right) return true;
+    if (isLoaderType(left) && isLoaderType(right)) return true;
+    if (isTruckType(left) && isTruckType(right)) return true;
+    return false;
+  }, []);
+
   // Driver actions
   const reportTrip = useCallback((orderId: string, evidence: TripEvidence) => {
     setOrders(prev =>
@@ -868,36 +993,76 @@ export default function App() {
   const acceptJob = useCallback((orderId: string, contractorId: string, assetType: AssetType) => {
     const contractor = contractors.find(c => c.id === contractorId);
     const driverDisplayName = contractor?.name || 'ВОДИТЕЛЬ';
-    const assignment: DriverAssignment = {
-      id: generateId(),
-      orderId,
-      driverName: driverDisplayName,
-      driverId: undefined,
-      contractorId,
-      contractorName: contractor?.name,
-      assetType,
-      vehicleNumber: '',
-      assignedPrice: 0,
-      priceUnit: 'За рейс' as any,
-      assignedAt: new Date().toISOString(),
-      assignedBy: 'SYSTEM',
-      status: 'assigned',
-    };
 
     setOrders(prev =>
       prev.map(o =>
         o.id === orderId
-          ? ({
-              ...o,
-              assignments: [...(o.assignments || []), assignment],
-              driverDetails: [...(o.driverDetails || []), assignment],
-              status: normalizeOrderStatus(o.status) === OrderStatus.SEARCHING_EQUIPMENT ? OrderStatus.EQUIPMENT_APPROVED : o.status,
-              updatedAt: new Date().toISOString(),
-            } as Order)
+          ? (() => {
+              let requirementUpdated = false;
+              let matchedRequirement: any;
+              let updatedRequirements = (o.assetRequirements || []).map(req => {
+                if (requirementUpdated) return req;
+                if (!isSameAssetGroup(req.type, assetType)) return req;
+                if (req.contractorId && req.contractorId !== contractorId) return req;
+                requirementUpdated = true;
+                matchedRequirement = req;
+                return {
+                  ...req,
+                  contractorId,
+                  contractorName: contractor?.name || req.contractorName || 'Подрядчик'
+                };
+              });
+
+              if (!requirementUpdated) {
+                const baseReq = (o.assetRequirements || []).find(req => isSameAssetGroup(req.type, assetType));
+                const priceUnit = baseReq?.priceUnit || (isLoaderType(assetType) ? PriceUnit.PER_SHIFT : PriceUnit.PER_TRIP);
+                const newReq = {
+                  id: generateId(),
+                  type: assetType,
+                  contractorId,
+                  contractorName: contractor?.name || 'Подрядчик',
+                  plannedUnits: 1,
+                  customerPrice: baseReq?.customerPrice || 0,
+                  contractorPrice: baseReq?.contractorPrice || 0,
+                  priceUnit,
+                  minimalCharge: baseReq?.minimalCharge || 0,
+                  deliveryCharge: baseReq?.deliveryCharge || 0,
+                };
+                matchedRequirement = newReq;
+                updatedRequirements = [...updatedRequirements, newReq];
+              }
+
+              const assignment: DriverAssignment = {
+                id: generateId(),
+                orderId,
+                driverName: driverDisplayName,
+                driverId: undefined,
+                contractorId,
+                contractorName: contractor?.name,
+                assetType,
+                vehicleNumber: '',
+                scheduledDate: o.scheduledTime, // Дата когда нужна техника (из заказа)
+                assignedPrice: matchedRequirement?.contractorPrice || 0,
+                priceUnit: matchedRequirement?.priceUnit || (isLoaderType(assetType) ? PriceUnit.PER_SHIFT : PriceUnit.PER_TRIP),
+                assignedAt: new Date().toISOString(),
+                assignedBy: 'SYSTEM',
+                status: 'assigned',
+              };
+
+              return {
+                ...o,
+                assetRequirements: updatedRequirements,
+                assignments: [...(o.assignments || []), assignment],
+                driverDetails: [...(o.driverDetails || []), assignment],
+                assignedDrivers: [...(o.assignedDrivers || []), driverDisplayName],
+                status: normalizeOrderStatus(o.status) === OrderStatus.SEARCHING_EQUIPMENT ? OrderStatus.EQUIPMENT_APPROVED : o.status,
+                updatedAt: new Date().toISOString(),
+              } as Order;
+            })()
           : o
       )
     );
-  }, [contractors]);
+  }, [contractors, isSameAssetGroup]);
 
   const finishWork = useCallback((orderId: string) => {
     setOrders(prev =>
@@ -1092,6 +1257,69 @@ export default function App() {
     );
   }, []);
 
+  // Удаление назначения техники (отзыв подрядчиком или диспетчером)
+  const removeDriverAssignment = useCallback((orderId: string, assignmentId: string, reason?: string) => {
+    setOrders(prev =>
+      prev.map(o => {
+        if (o.id !== orderId) return o;
+        const assignment = (o.driverDetails || []).find(d => d.id === assignmentId);
+        if (!assignment) return o;
+
+        // Удаляем назначение из driverDetails и assignments
+        const updatedDriverDetails = (o.driverDetails || []).filter(d => d.id !== assignmentId);
+        const updatedAssignments = (o.assignments || []).filter(a => a.id !== assignmentId);
+
+        // Удаляем водителя из assignedDrivers если больше нет его назначений
+        const assignedDrivers = (o.assignedDrivers || []).filter(name =>
+          updatedDriverDetails.some(d => d.driverName === name)
+        );
+
+        // Обновляем статус связанных бидов на 'withdrawn'
+        const updatedBids = (o.bids || []).map(b => {
+          if (b.contractorId === assignment.contractorId &&
+              b.assetType === assignment.assetType &&
+              b.status === 'accepted') {
+            return { ...b, status: 'withdrawn' as const };
+          }
+          return b;
+        });
+
+        let updatedRequirements = o.assetRequirements || [];
+        if (assignment.contractorId) {
+          const hasRemainingForContractor = updatedDriverDetails.some(d =>
+            d.contractorId === assignment.contractorId && isSameAssetGroup(d.assetType, assignment.assetType)
+          );
+          if (!hasRemainingForContractor) {
+            updatedRequirements = updatedRequirements.map(req => {
+              if (req.contractorId !== assignment.contractorId) return req;
+              if (!isSameAssetGroup(req.type, assignment.assetType)) return req;
+              return { ...req, contractorId: '', contractorName: 'Биржа' };
+            });
+          }
+        }
+
+        // Если больше нет назначенной техники, возвращаем статус на поиск техники
+        const normalized = normalizeOrderStatus(o.status);
+        let newStatus = o.status;
+        if (updatedDriverDetails.length === 0 &&
+            [OrderStatus.EQUIPMENT_APPROVED, OrderStatus.SCHEDULING].includes(normalized)) {
+          newStatus = OrderStatus.SEARCHING_EQUIPMENT;
+        }
+
+        return {
+          ...o,
+          assetRequirements: updatedRequirements,
+          driverDetails: updatedDriverDetails,
+          assignments: updatedAssignments,
+          assignedDrivers,
+          bids: updatedBids,
+          status: newStatus,
+          updatedAt: new Date().toISOString(),
+        } as Order;
+      })
+    );
+  }, []);
+
   const headerRight = useMemo(() => {
     if (role === 'dispatcher') {
       return (
@@ -1130,6 +1358,12 @@ export default function App() {
             Подрядчики
           </button>
           <button
+            className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-black text-red-700 hover:bg-red-100"
+            onClick={resetOrdersAndTrips}
+          >
+            Сбросить заказы
+          </button>
+          <button
             className="rounded-xl bg-slate-900 text-white px-4 py-2 text-sm font-black"
             onClick={() => {
               setEditingOrder(undefined);
@@ -1137,26 +1371,6 @@ export default function App() {
             }}
           >
             + Заказ
-          </button>
-          <button
-            className="rounded-xl bg-white border border-slate-200 px-4 py-2 text-sm font-black"
-            onClick={() => {
-              setEditingCustomer(undefined);
-              setCustomerReturnView(view === 'customers' ? 'customers' : view === 'order-form' ? 'order-form' : 'dashboard');
-              setView('customer-form');
-            }}
-          >
-            + Клиент
-          </button>
-          <button
-            className="rounded-xl bg-white border border-slate-200 px-4 py-2 text-sm font-black"
-            onClick={() => {
-              setEditingContractor(undefined);
-              setContractorReturnView(view === 'contractors' ? 'contractors' : view === 'order-form' ? 'order-form' : 'dashboard');
-              setView('contractor-form');
-            }}
-          >
-            + Подрядчик
           </button>
         </div>
       );
@@ -1177,7 +1391,7 @@ export default function App() {
       );
     }
     return null;
-  }, [contractors, currentContractorId, currentManager, role, view]);
+  }, [contractors, currentContractorId, currentManager, resetOrdersAndTrips, role, view]);
 
   const buildTag = `BUILD: ${new Date().toLocaleString()}`;
 
@@ -1306,7 +1520,13 @@ export default function App() {
                     <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Статус</span>
                     <select
                       value={statusFilter}
-                      onChange={e => setStatusFilter(e.target.value as OrderStatus | 'all')}
+                      onChange={e => {
+                        const value = e.target.value as OrderStatus | 'all';
+                        setStatusFilter(value);
+                        if (value === OrderStatus.COMPLETED) {
+                          setShowCompleted(true);
+                        }
+                      }}
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold"
                     >
                       <option value="all">Все статусы</option>
@@ -1316,6 +1536,20 @@ export default function App() {
                         </option>
                       ))}
                     </select>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Завершённые</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowCompleted(prev => !prev)}
+                      className={`rounded-xl border px-3 py-2 text-xs font-black uppercase transition-all ${
+                        showCompleted
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {showCompleted ? 'Скрыть завершённые' : 'Показать завершённые'}
+                    </button>
                   </div>
                   <div className="flex flex-col gap-1">
                     <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Сортировка</span>
@@ -1340,6 +1574,7 @@ export default function App() {
                         setCustomerFilterId(null);
                         setSortOrder('newest');
                         setShowCustomerSuggestions(false);
+                        setShowCompleted(false);
                       }}
                       className="rounded-xl bg-slate-900 text-white px-4 py-2 text-xs font-black uppercase tracking-widest self-end"
                     >
@@ -1601,6 +1836,8 @@ export default function App() {
               setView('customer-form');
             }}
             currentUser={currentManager}
+            onRemoveAssignment={removeDriverAssignment}
+            onUpdateOrder={updateOrder}
           />
         )}
 
@@ -1649,6 +1886,8 @@ export default function App() {
             onAcceptJob={acceptJob}
             onFinishWork={finishWork}
             onUpdateDriverAssignment={updateDriverAssignment}
+            onRemoveAssignment={removeDriverAssignment}
+            onUpdateOrder={updateOrder}
           />
         )}
 

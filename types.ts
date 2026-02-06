@@ -670,6 +670,11 @@ export interface ClosingDocs {
   ks2Url?: string; // КС-2
   ks3Url?: string; // КС-3
   photoReportUrl?: string;
+  attachments?: {
+    name: string;
+    url: string;
+  }[];
+  noteToCustomer?: string;
   // Статус
   status: 'draft' | 'ready' | 'sent' | 'accepted' | 'disputed';
   sentAt?: string;
@@ -909,6 +914,9 @@ export interface DriverAssignment {
   vehicleId?: string;
   vehicleNumber?: string;
 
+  // Когда нужна техника (из заказа)
+  scheduledDate?: string;
+
   assignedPrice: number;
   priceUnit: PriceUnit;
 
@@ -927,6 +935,8 @@ export interface DriverAssignment {
   shiftStartTime?: string;
   shiftEndTime?: string;
   shiftId?: string;
+  shiftApprovedBy?: string;
+  shiftApprovedAt?: string;
 
   // Итоги работы
   totalTrips?: number;
@@ -1032,11 +1042,11 @@ export interface Message {
   orderId: string;
   
   // Участники
-  fromRole: 'customer' | 'manager' | 'contractor' | 'driver' | 'system';
+  fromRole: 'customer' | 'manager' | 'contractor' | 'driver' | 'accountant' | 'system';
   fromName: string;
   fromId?: string;
   
-  toRole?: 'customer' | 'manager' | 'contractor' | 'driver';
+  toRole?: 'customer' | 'manager' | 'contractor' | 'driver' | 'accountant';
   toId?: string;
   
   // Контент
@@ -1345,6 +1355,84 @@ export const SIMPLIFIED_STATUS_FLOW: OrderStatus[] = [
   OrderStatus.CANCELLED
 ];
 
+// Группировка статусов по этапам workflow
+export type WorkflowStage = 'sale' | 'assignment' | 'execution' | 'closing' | 'special';
+
+export interface StageInfo {
+  id: WorkflowStage;
+  label: string;
+  icon: string;
+  color: string;
+  statuses: OrderStatus[];
+}
+
+export const WORKFLOW_STAGES: StageInfo[] = [
+  {
+    id: 'sale',
+    label: 'Продажа',
+    icon: '💼',
+    color: 'blue',
+    statuses: [
+      OrderStatus.DRAFT,
+      OrderStatus.NEW_REQUEST,
+      OrderStatus.CALCULATING,
+      OrderStatus.AWAITING_CUSTOMER,
+      OrderStatus.CONFIRMED_BY_CUSTOMER,
+      OrderStatus.CONTRACT_SIGNING,
+      OrderStatus.AWAITING_PREPAYMENT
+    ]
+  },
+  {
+    id: 'assignment',
+    label: 'Назначение',
+    icon: '🚛',
+    color: 'orange',
+    statuses: [
+      OrderStatus.SEARCHING_EQUIPMENT,
+      OrderStatus.SCHEDULING,
+      OrderStatus.EQUIPMENT_APPROVED
+    ]
+  },
+  {
+    id: 'execution',
+    label: 'Выполнение',
+    icon: '⚡',
+    color: 'green',
+    statuses: [
+      OrderStatus.EN_ROUTE,
+      OrderStatus.IN_PROGRESS,
+      OrderStatus.EXPORT_COMPLETED
+    ]
+  },
+  {
+    id: 'closing',
+    label: 'Закрытие',
+    icon: '📋',
+    color: 'purple',
+    statuses: [
+      OrderStatus.AWAITING_CLOSING_DOCS,
+      OrderStatus.CLOSING_DOCS_SENT,
+      OrderStatus.REPORT_READY,
+      OrderStatus.COMPLETED
+    ]
+  },
+  {
+    id: 'special',
+    label: 'Особые',
+    icon: '⚠️',
+    color: 'red',
+    statuses: [
+      OrderStatus.CANCELLED,
+      OrderStatus.DISPUTE
+    ]
+  }
+];
+
+export const getStatusStage = (status?: OrderStatus): StageInfo | undefined => {
+  if (!status) return WORKFLOW_STAGES[0];
+  return WORKFLOW_STAGES.find(stage => stage.statuses.includes(status));
+};
+
 const STATUS_LABELS: Record<OrderStatus, string> = {
   [OrderStatus.DRAFT]: 'Черновик',
   [OrderStatus.NEW_REQUEST]: 'Новая заявка',
@@ -1576,6 +1664,25 @@ export const isLoaderType = (type: AssetType) => {
   return [AssetType.LOADER, AssetType.LOADER_JCB, AssetType.FRONT_LOADER, AssetType.MINI_LOADER].includes(type);
 };
 
+export const isSameAssetGroup = (left: AssetType, right: AssetType) => {
+  if (left === right) return true;
+  if (isTruckType(left) && isTruckType(right)) return true;
+  if (isLoaderType(left) && isLoaderType(right)) return true;
+  return false;
+};
+
+export const findRequirementForAssignment = (order: Order, assignment: DriverAssignment) => {
+  const requirements = order.assetRequirements || [];
+  const matchesGroup = (req: AssetRequirement) => isSameAssetGroup(req.type, assignment.assetType);
+  const contractorKey = assignment.contractorId ? assignment.contractorId.trim() : '';
+  if (contractorKey) {
+    const byContractor = requirements.find(req => matchesGroup(req) && req.contractorId === contractorKey);
+    if (byContractor) return byContractor;
+  }
+  const openRequirement = requirements.find(req => matchesGroup(req) && !req.contractorId);
+  return openRequirement || requirements.find(matchesGroup);
+};
+
 export const getTripCounts = (order: Order) => {
   const planned = order.plannedTrips || 0;
   const actual = (order.evidences || []).length;
@@ -1634,48 +1741,92 @@ export const getUnitsForRequirement = (order: Order, req: AssetRequirement, opti
   return selectByMode(assignmentCount, assignmentCount, plannedUnits);
 };
 
+const getCustomerRequirements = (order: Order) => {
+  const requirements = order.assetRequirements || [];
+  const seen = new Set<string>();
+  const result: AssetRequirement[] = [];
+  requirements.forEach(req => {
+    const key = isTruckType(req.type)
+      ? 'truck'
+      : isLoaderType(req.type)
+      ? 'loader'
+      : `type:${req.type}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    result.push(req);
+  });
+  return result;
+};
+
+const getCustomerUnits = (order: Order, req: AssetRequirement, options?: { mode?: UnitsMode }) => {
+  const mode = options?.mode ?? 'actual_or_planned';
+  const normalized = normalizeOrderStatus(order.status);
+  const tripCounts = getTripCounts(order);
+  const plannedUnits = req.plannedUnits || 0;
+  const loaderAssignments = (order.driverDetails || []).filter(d => isLoaderType(d.assetType));
+  const startedCount = loaderAssignments.filter(d => d.shiftStartTime).length;
+  const completedCount = loaderAssignments.filter(d => d.shiftEndTime).length;
+  const hours = loaderAssignments.reduce((sum, d) => sum + getShiftHours(d.shiftStartTime, d.shiftEndTime, mode), 0);
+
+  const selectByMode = (actualValue: number, confirmedValue: number, plannedValue: number) => {
+    if (mode === 'planned') return plannedValue;
+    if (mode === 'actual') return actualValue;
+    if (mode === 'confirmed') return confirmedValue;
+    if (normalized === OrderStatus.COMPLETED) return confirmedValue;
+    return actualValue > 0 ? actualValue : plannedValue;
+  };
+
+  if (isTruckType(req.type) && req.priceUnit === PriceUnit.PER_TRIP) {
+    return selectByMode(tripCounts.actual, tripCounts.confirmed, tripCounts.planned);
+  }
+  if (isLoaderType(req.type)) {
+    if (req.priceUnit === PriceUnit.PER_SHIFT) {
+      return selectByMode(startedCount, completedCount, plannedUnits);
+    }
+    if (req.priceUnit === PriceUnit.PER_HOUR) {
+      return selectByMode(hours, hours, plannedUnits);
+    }
+  }
+  return getUnitsForRequirement(order, req, { mode });
+};
+
 export const calculateOrderTotals = (
   order: Order,
-  options?: { mode?: UnitsMode; includeCharges?: boolean }
+  options?: { mode?: UnitsMode; includeCharges?: boolean; contractorMode?: UnitsMode }
 ) => {
   const mode = options?.mode ?? 'actual_or_planned';
   const includeCharges = options?.includeCharges ?? false;
   let customerTotal = 0;
   let contractorTotal = 0;
-  const loaderAssignments = (order.driverDetails || []).filter(d => isLoaderType(d.assetType));
-  const loaderHasActual = loaderAssignments.some(d => d.shiftStartTime || d.shiftEndTime);
+  const customerRequirements = getCustomerRequirements(order);
 
-  (order.assetRequirements || []).forEach(req => {
-    const units = getUnitsForRequirement(order, req, { mode });
+  // Расчёт суммы для клиента (из requirements)
+  customerRequirements.forEach(req => {
+    const units = getCustomerUnits(order, req, { mode });
     customerTotal += units * (req.customerPrice || 0);
-    if (!(isLoaderType(req.type) && req.priceUnit === PriceUnit.PER_SHIFT && loaderHasActual)) {
-      contractorTotal += units * (req.contractorPrice || 0);
-    }
     if (includeCharges) {
       if (req.minimalCharge) customerTotal += req.minimalCharge;
       if (req.deliveryCharge) customerTotal += req.deliveryCharge;
     }
   });
 
-  if (loaderHasActual) {
-    loaderAssignments.forEach(assignment => {
-      const matchedRequirement = (order.assetRequirements || []).find(r =>
-        r.type === assignment.assetType ||
-        (isLoaderType(r.type) && isLoaderType(assignment.assetType)) ||
-        (isTruckType(r.type) && isTruckType(assignment.assetType))
-      );
-      const pricePerUnit = assignment.assignedPrice || matchedRequirement?.contractorPrice || 0;
-      if (!pricePerUnit) return;
-      const shiftHours = getShiftHours(assignment.shiftStartTime, assignment.shiftEndTime, 'confirmed');
-      if (assignment.shiftEndTime) {
-        const hourlyRate = pricePerUnit / 8;
-        const computedByHours = shiftHours > 7 ? hourlyRate * shiftHours : pricePerUnit;
-        contractorTotal += Math.max(pricePerUnit, computedByHours);
-        return;
-      }
-      if (assignment.shiftStartTime) {
-        contractorTotal += pricePerUnit;
-      }
+  // Расчёт суммы подрядчикам (из фактических назначений)
+  const allAssignments = [...(order.assignments || []), ...(order.driverDetails || [])];
+  const uniqueAssignments = allAssignments.filter((a, idx, arr) =>
+    arr.findIndex(x => x.id === a.id) === idx
+  );
+
+  if (uniqueAssignments.length > 0) {
+    // Есть назначения - считаем по фактической работе каждого водителя
+    uniqueAssignments.forEach(assignment => {
+      const earnings = calculateAssignmentEarnings(order, assignment);
+      contractorTotal += earnings.confirmedAmount + earnings.pendingAmount;
+    });
+  } else {
+    // Нет назначений - считаем по плану из requirements
+    (order.assetRequirements || []).forEach(req => {
+      const units = getUnitsForRequirement(order, req, { mode: 'planned' });
+      contractorTotal += units * (req.contractorPrice || 0);
     });
   }
 
@@ -1683,11 +1834,7 @@ export const calculateOrderTotals = (
 };
 
 export const calculateAssignmentEarnings = (order: Order, assignment: DriverAssignment) => {
-  const matchedRequirement = order.assetRequirements.find(r =>
-    r.type === assignment.assetType ||
-    (isLoaderType(r.type) && isLoaderType(assignment.assetType)) ||
-    (isTruckType(r.type) && isTruckType(assignment.assetType))
-  );
+  const matchedRequirement = findRequirementForAssignment(order, assignment);
   const pricePerUnit = assignment.assignedPrice || matchedRequirement?.contractorPrice || 0;
   const evidences = (order.evidences || []).filter(e =>
     assignment.id ? e.assignmentId === assignment.id : e.driverName === assignment.driverName

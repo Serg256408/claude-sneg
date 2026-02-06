@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Order, OrderStatus, ManagerName, Contractor, AssetRequirement, AssetType, Customer, Bid, Quote, ActionLog, formatPrice, formatDateTime, generateId, PriceUnit, FULL_ORDER_STATUS_FLOW, getOrderStatusLabel, getNormalizedStatusLabel, normalizeOrderStatus, calculateOrderTotals, isTruckType, isLoaderType, toLocalDateTimeInputValue } from './types';
+import { Order, OrderStatus, ManagerName, Contractor, AssetRequirement, AssetType, Customer, Bid, Quote, ActionLog, Message, DriverAssignment, formatPrice, formatDateTime, generateId, PriceUnit, FULL_ORDER_STATUS_FLOW, getOrderStatusLabel, getNormalizedStatusLabel, normalizeOrderStatus, calculateOrderTotals, isTruckType, isLoaderType, toLocalDateTimeInputValue, WORKFLOW_STAGES, getStatusStage, getShiftHours } from './types';
+import ConfirmModal from './ConfirmModal';
 
 interface OrderFormProps {
   initialData?: Order;
@@ -12,6 +13,8 @@ interface OrderFormProps {
   onAddContractor: () => void;
   onAddCustomer: () => void;
   currentUser: ManagerName;
+  onRemoveAssignment?: (orderId: string, assignmentId: string, reason?: string) => void;
+  onUpdateOrder?: (orderId: string, updates: Partial<Order>) => void;
 }
 
 const OrderForm: React.FC<OrderFormProps> = ({
@@ -21,7 +24,9 @@ const OrderForm: React.FC<OrderFormProps> = ({
   onSubmit,
   onDelete,
   onCancel,
-  currentUser
+  currentUser,
+  onRemoveAssignment,
+  onUpdateOrder
 }) => {
   const [formData, setFormData] = useState<Partial<Order>>(initialData || {
     customer: '',
@@ -55,6 +60,180 @@ const OrderForm: React.FC<OrderFormProps> = ({
   });
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // Состояние модалки подтверждения удаления
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  // Состояние модалки подтверждения (универсальная)
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmText?: string;
+    confirmColor?: 'red' | 'blue' | 'green';
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {}
+  });
+
+  // Состояние модалки сообщений подрядчику
+  const [messageModal, setMessageModal] = useState<{
+    isOpen: boolean;
+    contractorId: string;
+    contractorName: string;
+    message: string;
+  }>({
+    isOpen: false,
+    contractorId: '',
+    contractorName: '',
+    message: ''
+  });
+  const dispatcherChatRef = useRef<HTMLDivElement>(null);
+
+  // Авто-скролл к последнему сообщению в чате с подрядчиком
+  useEffect(() => {
+    if (messageModal.isOpen && dispatcherChatRef.current) {
+      dispatcherChatRef.current.scrollTop = dispatcherChatRef.current.scrollHeight;
+    }
+  }, [messageModal.isOpen, formData.messages?.length]);
+
+  const isSameAssetGroupLocal = useCallback((left: AssetType, right: AssetType) => {
+    if (left === right) return true;
+    if (isLoaderType(left) && isLoaderType(right)) return true;
+    if (isTruckType(left) && isTruckType(right)) return true;
+    return false;
+  }, []);
+
+  const [shiftEdits, setShiftEdits] = useState<Record<string, { start: string; end: string; price: string }>>({});
+
+  // Отправка сообщения подрядчику
+  const sendMessageToContractor = useCallback(() => {
+    if (!messageModal.message.trim() || !messageModal.contractorId) return;
+
+    const newMessage: Message = {
+      id: generateId(),
+      orderId: formData.id || '',
+      fromRole: 'dispatcher',
+      fromName: currentUser,
+      toRole: 'contractor',
+      toId: messageModal.contractorId,
+      text: messageModal.message.trim(),
+      timestamp: new Date().toISOString(),
+      isRead: false
+    };
+
+    const updatedMessages = [...(formData.messages || []), newMessage];
+
+    // Обновляем локально
+    setFormData(prev => ({
+      ...prev,
+      messages: updatedMessages
+    }));
+
+    // Сохраняем сразу в базу
+    if (onUpdateOrder && formData.id) {
+      onUpdateOrder(formData.id, {
+        messages: updatedMessages,
+        unreadMessages: (formData.unreadMessages || 0) + 1
+      });
+    }
+
+    setMessageModal(prev => ({ ...prev, isOpen: false, message: '' }));
+  }, [messageModal, formData.id, formData.messages, formData.unreadMessages, currentUser, onUpdateOrder]);
+
+  useEffect(() => {
+    if (!(formData.driverDetails || []).length) return;
+    setFormData(prev => {
+      const requirements = [...(prev.assetRequirements || [])];
+      let changed = false;
+      (prev.driverDetails || []).forEach(driver => {
+        if (!driver.contractorId) return;
+        const exists = requirements.some(req =>
+          isSameAssetGroupLocal(req.type, driver.assetType) && req.contractorId === driver.contractorId
+        );
+        if (exists) return;
+        const baseReq = requirements.find(req => isSameAssetGroupLocal(req.type, driver.assetType));
+        const priceUnit = driver.priceUnit || baseReq?.priceUnit || (isLoaderType(driver.assetType) ? PriceUnit.PER_SHIFT : PriceUnit.PER_TRIP);
+        requirements.push({
+          id: generateId(),
+          type: driver.assetType,
+          contractorId: driver.contractorId,
+          contractorName: driver.contractorName || 'Подрядчик',
+          plannedUnits: 1,
+          customerPrice: baseReq?.customerPrice || 0,
+          contractorPrice: driver.assignedPrice || baseReq?.contractorPrice || 0,
+          priceUnit,
+          minimalCharge: baseReq?.minimalCharge || 0,
+          deliveryCharge: baseReq?.deliveryCharge || 0,
+        });
+        changed = true;
+      });
+      if (!changed) return prev;
+      return { ...prev, assetRequirements: requirements };
+    });
+  }, [formData.driverDetails, formData.assetRequirements, isSameAssetGroupLocal]);
+
+  const getShiftEdit = useCallback((driver: DriverAssignment) => {
+    const edit = shiftEdits[driver.id];
+    return {
+      start: edit?.start ?? (driver.shiftStartTime || ''),
+      end: edit?.end ?? (driver.shiftEndTime || ''),
+      price: edit?.price ?? (driver.assignedPrice ? String(driver.assignedPrice) : '')
+    };
+  }, [shiftEdits]);
+
+  const updateShiftEdit = useCallback((driverId: string, updates: Partial<{ start: string; end: string; price: string }>) => {
+    setShiftEdits(prev => ({
+      ...prev,
+      [driverId]: { ...(prev[driverId] || { start: '', end: '', price: '' }), ...updates }
+    }));
+  }, []);
+
+  const confirmLoaderShift = useCallback((driver: DriverAssignment) => {
+    const edit = getShiftEdit(driver);
+    const normalizedStart = edit.start || driver.shiftStartTime || '';
+    const normalizedEnd = edit.end || driver.shiftEndTime || '';
+    if (!normalizedStart || !normalizedEnd) {
+      alert('Укажите время начала и окончания смены.');
+      return;
+    }
+    const parsedPrice = Number(edit.price.replace(',', '.'));
+    const priceValue = Number.isFinite(parsedPrice) && parsedPrice > 0 ? parsedPrice : driver.assignedPrice;
+
+    setFormData(prev => {
+      const updatedDrivers = (prev.driverDetails || []).map(d =>
+        d.id === driver.id
+          ? {
+              ...d,
+              shiftStartTime: normalizedStart,
+              shiftEndTime: normalizedEnd,
+              assignedPrice: priceValue,
+              shiftApprovedBy: currentUser,
+              shiftApprovedAt: new Date().toISOString()
+            }
+          : d
+      );
+      const logEntry: ActionLog = {
+        id: generateId(),
+        orderId: prev.id || '',
+        timestamp: new Date().toISOString(),
+        action: `Смена подтверждена диспетчером (${driver.driverName})`,
+        actionType: 'assignment',
+        performedBy: currentUser,
+        performedByRole: 'manager'
+      };
+      const updated = {
+        ...prev,
+        driverDetails: updatedDrivers,
+        actionLog: [...(prev.actionLog || []), logEntry]
+      };
+      onSubmit(updated, true);
+      return updated;
+    });
+  }, [currentUser, getShiftEdit, onSubmit]);
+
   // Вычисляемые значения
   const hasDirectOffers = useMemo(() => formData.assetRequirements?.some(r => r.contractorId), [formData.assetRequirements]);
   const hasBirzhaSlots = useMemo(() => formData.assetRequirements?.some(r => !r.contractorId), [formData.assetRequirements]);
@@ -77,7 +256,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
 
   // Расчёт итогов
   const totals = useMemo(() => {
-    return calculateOrderTotals(formData as Order, { mode: 'actual_or_planned', includeCharges: true });
+    return calculateOrderTotals(formData as Order, { mode: 'actual_or_planned', includeCharges: true, contractorMode: 'actual' });
   }, [formData.assetRequirements, formData.driverDetails, formData.evidences, formData.plannedTrips, formData.status]);
   const requiredPayment = (formData.totalCustomerPrice || totals.customerTotal || 0);
   const isFullyPaid = requiredPayment > 0 ? totalPaid >= requiredPayment : totalPaid > 0;
@@ -113,8 +292,14 @@ const OrderForm: React.FC<OrderFormProps> = ({
 
   const handleDelete = () => {
     if (!formData.id) return;
-    if (!confirm('Удалить заявку? Она исчезнет у всех участников.')) return;
-    onDelete(formData.id);
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDelete = () => {
+    if (formData.id) {
+      onDelete(formData.id);
+    }
+    setShowDeleteConfirm(false);
   };
 
   const handleSelectCustomer = (c: Customer) => {
@@ -129,14 +314,39 @@ const OrderForm: React.FC<OrderFormProps> = ({
   };
 
   const updateAsset = (idx: number, field: keyof AssetRequirement, value: any) => {
-    const updated = [...(formData.assetRequirements || [])];
-    if (field === 'contractorId') {
-      const c = contractors.find(item => item.id === value);
-      updated[idx] = { ...updated[idx], contractorId: value, contractorName: c ? c.name : 'Биржа' };
-    } else {
-      updated[idx] = { ...updated[idx], [field]: value };
-    }
-    setFormData({ ...formData, assetRequirements: updated });
+    setFormData(prev => {
+      const updated = [...(prev.assetRequirements || [])];
+      if (!updated[idx]) return prev;
+      if (field === 'contractorId') {
+        const c = contractors.find(item => item.id === value);
+        updated[idx] = { ...updated[idx], contractorId: value, contractorName: c ? c.name : 'Биржа' };
+      } else {
+        updated[idx] = { ...updated[idx], [field]: value };
+      }
+
+      let updatedDrivers = prev.driverDetails;
+      let updatedAssignments = prev.assignments;
+      if (field === 'contractorPrice') {
+        const targetRequirement = updated[idx];
+        const newPrice = Number(value) || 0;
+        updatedDrivers = (prev.driverDetails || []).map(driver => {
+          const sameGroup = isSameAssetGroupLocal(driver.assetType, targetRequirement.type);
+          const contractorMatches = targetRequirement.contractorId
+            ? driver.contractorId === targetRequirement.contractorId
+            : !driver.contractorId;
+          return sameGroup && contractorMatches ? { ...driver, assignedPrice: newPrice } : driver;
+        });
+        updatedAssignments = (prev.assignments || []).map(assignment => {
+          const sameGroup = isSameAssetGroupLocal(assignment.assetType, targetRequirement.type);
+          const contractorMatches = targetRequirement.contractorId
+            ? assignment.contractorId === targetRequirement.contractorId
+            : !assignment.contractorId;
+          return sameGroup && contractorMatches ? { ...assignment, assignedPrice: newPrice } : assignment;
+        });
+      }
+
+      return { ...prev, assetRequirements: updated, driverDetails: updatedDrivers, assignments: updatedAssignments };
+    });
   };
 
   const addAsset = (type: AssetType) => {
@@ -170,9 +380,9 @@ const OrderForm: React.FC<OrderFormProps> = ({
     updatedBids[bidIndex] = { ...bid, status: 'accepted' };
 
     let requirementUpdated = false;
-    const updatedRequirements = (formData.assetRequirements || []).map(req => {
+    let updatedRequirements = (formData.assetRequirements || []).map(req => {
       if (requirementUpdated) return req;
-      if (req.type !== bid.assetType) return req;
+      if (!isSameAssetGroupLocal(req.type, bid.assetType)) return req;
       if (req.contractorId && req.contractorId !== bid.contractorId) return req;
       requirementUpdated = true;
       return {
@@ -183,6 +393,25 @@ const OrderForm: React.FC<OrderFormProps> = ({
         priceUnit: bid.priceUnit || req.priceUnit
       };
     });
+    if (!requirementUpdated) {
+      const baseReq = (formData.assetRequirements || []).find(req => isSameAssetGroupLocal(req.type, bid.assetType));
+      const priceUnit = bid.priceUnit || baseReq?.priceUnit || (isLoaderType(bid.assetType) ? PriceUnit.PER_SHIFT : PriceUnit.PER_TRIP);
+      updatedRequirements = [
+        ...updatedRequirements,
+        {
+          id: generateId(),
+          type: bid.assetType,
+          contractorId: bid.contractorId,
+          contractorName: bid.contractorName || 'Подрядчик',
+          plannedUnits: 1,
+          customerPrice: baseReq?.customerPrice || 0,
+          contractorPrice: bid.proposedPrice || baseReq?.contractorPrice || 0,
+          priceUnit,
+          minimalCharge: baseReq?.minimalCharge || 0,
+          deliveryCharge: baseReq?.deliveryCharge || 0,
+        }
+      ];
+    }
 
     const newDriverDetail = {
       id: generateId(),
@@ -472,31 +701,58 @@ const OrderForm: React.FC<OrderFormProps> = ({
         </div>
       </div>
 
-      {/* PROGRESS STEPPER */}
+      {/* PROGRESS STEPPER - По этапам */}
       <div className="px-6 py-4 bg-white/[0.02] border-b border-white/5 shrink-0">
-        <div className="flex justify-between items-center relative">
-          <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-white/5 -translate-y-1/2 z-0"></div>
-          {statusSteps.map((s, i) => {
-            const isActive = normalizedStatus === s;
-            const isDone = currentStepIndex > i;
-            return (
-              <div key={s} className="relative z-10 flex flex-col items-center gap-2 flex-1">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-black border-2 transition-all ${
-                  isActive ? 'bg-blue-600 border-blue-400 shadow-[0_0_20px_rgba(37,99,235,0.5)]' : 
-                  isDone ? 'bg-green-500 border-green-400' : 
-                  'bg-[#12192c] border-white/10 text-slate-600'
-                }`}>
-                  {isDone ? '✓' : i + 1}
+        {(() => {
+          const currentStage = getStatusStage(formData.status as OrderStatus);
+          const mainStages = WORKFLOW_STAGES.filter(s => s.id !== 'special');
+          const currentStageIndex = mainStages.findIndex(s => s.id === currentStage?.id);
+          const isSpecialStatus = currentStage?.id === 'special';
+
+          return (
+            <div className="flex justify-between items-center relative">
+              <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-white/5 -translate-y-1/2 z-0"></div>
+              {mainStages.map((stage, i) => {
+                const isActive = currentStage?.id === stage.id;
+                const isDone = currentStageIndex > i && !isSpecialStatus;
+                const stageColors = {
+                  blue: { bg: 'bg-blue-600', border: 'border-blue-400', shadow: 'shadow-[0_0_20px_rgba(37,99,235,0.5)]', text: 'text-blue-400' },
+                  orange: { bg: 'bg-orange-600', border: 'border-orange-400', shadow: 'shadow-[0_0_20px_rgba(234,88,12,0.5)]', text: 'text-orange-400' },
+                  green: { bg: 'bg-green-600', border: 'border-green-400', shadow: 'shadow-[0_0_20px_rgba(22,163,74,0.5)]', text: 'text-green-400' },
+                  purple: { bg: 'bg-purple-600', border: 'border-purple-400', shadow: 'shadow-[0_0_20px_rgba(147,51,234,0.5)]', text: 'text-purple-400' }
+                };
+                const colors = stageColors[stage.color as keyof typeof stageColors] || stageColors.blue;
+
+                return (
+                  <div key={stage.id} className="relative z-10 flex flex-col items-center gap-2 flex-1">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg border-2 transition-all ${
+                      isActive ? `${colors.bg} ${colors.border} ${colors.shadow}` :
+                      isDone ? 'bg-green-500 border-green-400' :
+                      'bg-[#12192c] border-white/10'
+                    }`}>
+                      {isDone ? '✓' : stage.icon}
+                    </div>
+                    <span className={`text-[8px] font-black uppercase tracking-wider text-center leading-tight ${
+                      isActive ? colors.text : isDone ? 'text-green-400' : 'text-slate-600'
+                    }`}>
+                      {stage.label}
+                    </span>
+                    {isActive && (
+                      <span className="text-[7px] text-slate-500 text-center max-w-[90px]">
+                        {getOrderStatusLabel(formData.status as OrderStatus)}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+              {isSpecialStatus && (
+                <div className="absolute -top-2 -right-2 bg-red-600 text-white text-[8px] px-2 py-1 rounded-full font-black">
+                  {currentStage?.icon} {currentStage?.label}
                 </div>
-                <span className={`text-[7px] font-black uppercase tracking-wider text-center leading-tight max-w-[80px] ${
-                  isActive || isDone ? 'text-slate-300' : 'text-slate-600'
-                }`}>
-                  {getNormalizedStatusLabel(s).split(' ').slice(0, 2).join(' ')}
-                </span>
-              </div>
-            );
-          })}
-        </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* TABS */}
@@ -535,23 +791,39 @@ const OrderForm: React.FC<OrderFormProps> = ({
                 Новые отклики ({pendingBids.length})
               </h4>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {pendingBids.map((bid) => {
+            {(() => {
+              const loaderBids = pendingBids.filter(b => isLoaderType(b.assetType));
+              const truckBids = pendingBids.filter(b => !isLoaderType(b.assetType));
+              const minLoaderPrice = loaderBids.length ? Math.min(...loaderBids.map(b => b.proposedPrice)) : null;
+              const minTruckPrice = truckBids.length ? Math.min(...truckBids.map(b => b.proposedPrice)) : null;
+
+              const renderBid = (bid: Bid, minPrice: number | null) => {
                 const assetLabel = bid.assetType === AssetType.LOADER
                   ? 'Погрузчик'
                   : bid.assetType === AssetType.MINI_LOADER
                     ? 'Мини-погрузчик'
                     : 'Самосвал';
+                const isCheapest = minPrice !== null && bid.proposedPrice === minPrice;
                 return (
-                  <div key={bid.id} className="bg-white/5 p-4 rounded-xl flex items-center justify-between">
+                  <div
+                    key={bid.id}
+                    className={`p-4 rounded-xl flex items-center justify-between border ${
+                      isCheapest
+                        ? 'bg-amber-500/10 border-amber-400/60 shadow-[0_0_20px_rgba(251,191,36,0.25)]'
+                        : 'bg-white/5 border-white/10'
+                    }`}
+                  >
                     <div className="flex items-center gap-3">
                       <div className="flex items-center gap-2">
-                        <span className="text-2xl">{bid.assetType === AssetType.LOADER ? '🚜' : '🚛'}</span>
+                        <span className="text-2xl">{isLoaderType(bid.assetType) ? '🚜' : '🚛'}</span>
                         <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">{assetLabel}</span>
                       </div>
                       <div>
                         <div className="text-sm font-black">{bid.driverName}</div>
                         <div className="text-[14px] text-green-400">{formatPrice(bid.proposedPrice)} • {bid.estimatedArrival}</div>
+                        {isCheapest && (
+                          <div className="text-[8px] font-black uppercase text-amber-300">Самое дешевое</div>
+                        )}
                       </div>
                     </div>
                     <div className="flex gap-2">
@@ -560,8 +832,31 @@ const OrderForm: React.FC<OrderFormProps> = ({
                     </div>
                   </div>
                 );
-              })}
-            </div>
+              };
+
+              const renderColumn = (title: string, bids: Bid[], minPrice: number | null) => (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    <span>{title}</span>
+                    <span>{bids.length}</span>
+                  </div>
+                  {bids.length === 0 ? (
+                    <div className="bg-white/5 p-4 rounded-xl text-[10px] uppercase text-slate-500 text-center">
+                      Нет предложений
+                    </div>
+                  ) : (
+                    bids.map(bid => renderBid(bid, minPrice))
+                  )}
+                </div>
+              );
+
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {renderColumn('Самосвалы', truckBids, minTruckPrice)}
+                  {renderColumn('Погрузчики', loaderBids, minLoaderPrice)}
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -721,8 +1016,12 @@ const OrderForm: React.FC<OrderFormProps> = ({
                       driver.id ? ev.assignmentId === driver.id : ev.driverName === driver.driverName
                     );
                     const confirmedTrips = driverTrips.filter(ev => ev.confirmed);
+                    const matchedRequirement = (formData.assetRequirements || []).find(r =>
+                      isSameAssetGroupLocal(r.type, driver.assetType) &&
+                      (driver.contractorId ? r.contractorId === driver.contractorId : true)
+                    );
                     const pricePerUnit = driver.assignedPrice
-                      || formData.assetRequirements.find(r => r.type === driver.assetType)?.contractorPrice
+                      || matchedRequirement?.contractorPrice
                       || 0;
                     const isLoader = [
                       AssetType.LOADER,
@@ -746,43 +1045,199 @@ const OrderForm: React.FC<OrderFormProps> = ({
                     };
                     const shiftLabel = `Смена 7+1: ${formatShiftTime(driver.shiftStartTime)}–${formatShiftTime(driver.shiftEndTime)}`;
                     const shiftPriceLabel = pricePerUnit > 0 ? ` • ${formatPrice(pricePerUnit)}/смена` : '';
+                    const shiftHours = driver.shiftStartTime && driver.shiftEndTime
+                      ? getShiftHours(driver.shiftStartTime, driver.shiftEndTime, 'confirmed')
+                      : 0;
+                    const formatHours = (value: number) => {
+                      if (!Number.isFinite(value) || value <= 0) return '0';
+                      const rounded = Math.round(value * 10) / 10;
+                      return rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1);
+                    };
+                    const hourlyRate = pricePerUnit > 0 ? pricePerUnit / 8 : 0;
+                    const computedByHours = shiftHours > 0 ? hourlyRate * shiftHours : 0;
+                    const computedTotal = driver.priceUnit === PriceUnit.PER_HOUR
+                      ? shiftHours * pricePerUnit
+                      : shiftHours > 7
+                        ? Math.max(pricePerUnit, computedByHours)
+                        : pricePerUnit;
 
                     const totalTrips = driverTrips.length;
                     const totalAmount = isLoader ? pricePerUnit : totalTrips * pricePerUnit;
                     const totalLabel = isLoader
                       ? `Итого: ${formatPrice(totalAmount)} (смена${pricePerUnit ? ` × ${formatPrice(pricePerUnit)}` : ''})`
                       : `Итого: ${formatPrice(totalAmount)} (${totalTrips} рейсов${pricePerUnit ? ` × ${formatPrice(pricePerUnit)}` : ''})`;
+                    const showShiftReview = isLoader && !!(driver.shiftStartTime || driver.shiftEndTime);
+                    const isShiftApproved = !!driver.shiftApprovedAt;
+                    const shiftEdit = showShiftReview ? getShiftEdit(driver) : { start: '', end: '', price: '' };
 
                     return (
-                      <div key={i} className="flex items-center justify-between bg-white/5 p-4 rounded-xl">
-                        <div className="flex items-center gap-3">
-                          <span className="text-2xl">{driver.assetType === AssetType.LOADER ? '🚜' : '🚛'}</span>
-                          <div>
-                            <div className="text-sm font-black">{driver.driverName}</div>
-                            <div className="text-[14px] text-slate-500">
-                              {driver.assetType === AssetType.LOADER ? 'Погрузчик' : driver.assetType === AssetType.MINI_LOADER ? 'Мини-погрузчик' : 'Самосвал'} • {driver.contractorName || 'Частный'}
-                              {(driverTrips.length > 0 || driver.shiftStartTime || driver.shiftEndTime) && (
-                                <div className="text-[12px] text-slate-400 mt-1">
-                                  {isLoader
-                                    ? `Водитель: ${shiftLabel}${shiftPriceLabel}`
-                                    : `Водитель: ${tripsLabel}${confirmedLabel}${tripPriceLabel}`}
-                                </div>
-                              )}
-                              {isOrderCompleted && (driverTrips.length > 0 || driver.shiftStartTime || driver.shiftEndTime) && (
-                                <div className="text-[12px] text-slate-300 mt-1 font-black">
-                                  {totalLabel}
-                                </div>
-                              )}
+                      <div key={i} className="bg-white/5 p-4 rounded-xl">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-3">
+                            <span className="text-2xl">{driver.assetType === AssetType.LOADER ? '🚜' : '🚛'}</span>
+                            <div>
+                              <div className="text-sm font-black">{driver.driverName}</div>
+                              <div className="text-[14px] text-slate-500">
+                                {driver.assetType === AssetType.LOADER ? 'Погрузчик' : driver.assetType === AssetType.MINI_LOADER ? 'Мини-погрузчик' : 'Самосвал'} • {driver.contractorName || 'Частный'}
+                              </div>
+                            </div>
+                          </div>
+                          <div className={`px-3 py-1 rounded-lg text-[14px] font-black uppercase ${
+                            driver.status === 'completed' ? 'bg-green-500/20 text-green-400' :
+                            driver.status === 'working' ? 'bg-yellow-500/20 text-yellow-400' :
+                            driver.status === 'en_route' ? 'bg-blue-500/20 text-blue-400' :
+                            'bg-slate-500/20 text-slate-400'
+                          }`}>
+                            {driver.status === 'completed' ? 'Завершено' :
+                             driver.status === 'working' ? 'В работе' :
+                             driver.status === 'en_route' ? 'В пути' :
+                             'Назначен'}
                           </div>
                         </div>
-                        </div>
-                        <div className={`px-3 py-1 rounded-lg text-[14px] font-black uppercase ${
-                          driver.status === 'working' ? 'bg-green-500/20 text-green-400' :
-                          driver.status === 'en_route' ? 'bg-blue-500/20 text-blue-400' :
-                          'bg-slate-500/20 text-slate-400'
-                        }`}>
-                          {driver.status || 'Назначен'}
-                        </div>
+
+                        {/* Информация о работе */}
+                        {(driverTrips.length > 0 || driver.shiftStartTime || driver.shiftEndTime) && (
+                          <div className="text-[12px] text-slate-400 mb-3">
+                            {isLoader
+                              ? `${shiftLabel}${shiftPriceLabel}`
+                              : `${tripsLabel}${confirmedLabel}${tripPriceLabel}`}
+                            {isLoader && shiftHours > 0 && (
+                              <div className="mt-2 space-y-1">
+                                <div className="text-[11px] text-slate-500">
+                                  Часы: {formatHours(shiftHours)} • Цена часа: {formatPrice(hourlyRate)}/ч
+                                </div>
+                                <div className="text-[12px] text-emerald-300 font-black">
+                                  К утверждению: {formatPrice(computedTotal)}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {isOrderCompleted && (driverTrips.length > 0 || driver.shiftStartTime || driver.shiftEndTime) && (
+                          <div className="text-[12px] text-slate-300 mb-3 font-black">
+                            {totalLabel}
+                          </div>
+                        )}
+
+                        {showShiftReview && (
+                          <div className="bg-black/20 border border-white/10 rounded-xl p-3 mb-3">
+                            <div className="flex items-center justify-between gap-2 mb-2">
+                              <div className="text-[10px] font-black uppercase text-slate-400">Подтверждение смены</div>
+                              {isShiftApproved && driver.shiftApprovedAt && (
+                                <div className="text-[9px] text-emerald-300">
+                                  Подтверждено {formatDateTime(driver.shiftApprovedAt)}
+                                </div>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                              <div>
+                                <label className="text-[9px] text-slate-500 uppercase mb-1 block">Начало</label>
+                                <input
+                                  type="time"
+                                  value={shiftEdit.start}
+                                  onChange={e => updateShiftEdit(driver.id, { start: e.target.value })}
+                                  className="w-full bg-[#0a0f1d] border border-white/10 rounded-lg px-3 py-2 text-[12px] font-black text-center outline-none focus:border-emerald-400"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[9px] text-slate-500 uppercase mb-1 block">Конец</label>
+                                <input
+                                  type="time"
+                                  value={shiftEdit.end}
+                                  onChange={e => updateShiftEdit(driver.id, { end: e.target.value })}
+                                  className="w-full bg-[#0a0f1d] border border-white/10 rounded-lg px-3 py-2 text-[12px] font-black text-center outline-none focus:border-emerald-400"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[9px] text-slate-500 uppercase mb-1 block">Цена/смена</label>
+                                <input
+                                  type="number"
+                                  value={shiftEdit.price}
+                                  onChange={e => updateShiftEdit(driver.id, { price: e.target.value })}
+                                  className="w-full bg-[#0a0f1d] border border-white/10 rounded-lg px-3 py-2 text-[12px] font-black text-center outline-none focus:border-emerald-400"
+                                  min="0"
+                                  step="100"
+                                />
+                              </div>
+                            </div>
+                            {shiftHours > 0 && (
+                              <div className="mt-3 text-[11px] text-slate-400">
+                                Часы: {formatHours(shiftHours)} • Цена часа: {formatPrice(hourlyRate)}/ч
+                                <span className="ml-2 text-emerald-300 font-black">
+                                  К утверждению: {formatPrice(computedTotal)}
+                                </span>
+                              </div>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => confirmLoaderShift(driver)}
+                              className="w-full mt-3 bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-xl text-[10px] font-black uppercase tracking-wider"
+                            >
+                              {isShiftApproved ? 'Сохранить изменения' : 'Подтвердить смену'}
+                            </button>
+                            {driver.shiftApprovedBy && (
+                              <div className="text-[9px] text-slate-500 mt-2">
+                                Подтвердил: {driver.shiftApprovedBy}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Кнопки управления */}
+                        {!isOrderCompleted && (
+                          <div className="flex items-center gap-2 pt-2 border-t border-white/5">
+                            {/* Кнопка снятия техники - только если не в работе/пути */}
+                            {['assigned', 'confirmed'].includes(driver.status) && onRemoveAssignment && formData.id && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setConfirmModal({
+                                    isOpen: true,
+                                    title: 'Снять технику',
+                                    message: `Снять "${driver.driverName}" с этого заказа? Слот снова появится на бирже.`,
+                                    confirmText: 'Снять',
+                                    confirmColor: 'red',
+                                    onConfirm: () => {
+                                      onRemoveAssignment(formData.id!, driver.id, 'Снято диспетчером');
+                                      // Обновляем локальное состояние
+                                      setFormData(prev => ({
+                                        ...prev,
+                                        driverDetails: (prev.driverDetails || []).filter(d => d.id !== driver.id)
+                                      }));
+                                      setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                                    }
+                                  });
+                                }}
+                                className="px-3 py-2 min-h-[36px] rounded-xl text-[10px] font-black uppercase bg-red-600/20 text-red-400 hover:bg-red-600 hover:text-white transition-all"
+                              >
+                                ❌ Снять
+                              </button>
+                            )}
+                            {/* Кнопка отправки сообщения подрядчику */}
+                            {driver.contractorId && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMessageModal({
+                                    isOpen: true,
+                                    contractorId: driver.contractorId || '',
+                                    contractorName: driver.contractorName || driver.driverName,
+                                    message: ''
+                                  });
+                                }}
+                                className="px-3 py-2 min-h-[36px] rounded-xl text-[10px] font-black uppercase bg-blue-600/20 text-blue-400 hover:bg-blue-600 hover:text-white transition-all"
+                              >
+                                💬 Написать
+                              </button>
+                            )}
+                            {/* Показываем сообщение если техника уже в работе */}
+                            {!['assigned', 'confirmed'].includes(driver.status) && driver.status !== 'completed' && (
+                              <span className="text-[10px] text-slate-500 italic">
+                                Техника уже {driver.status === 'en_route' ? 'в пути' : 'в работе'} — снять нельзя
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -871,25 +1326,85 @@ const OrderForm: React.FC<OrderFormProps> = ({
                     </div>
                   )})}
                 </div>
+
+                {/* Предупреждение об убыточных позициях */}
+                {(formData.assetRequirements || []).some(req =>
+                  req.customerPrice > 0 && req.contractorPrice > 0 && req.contractorPrice >= req.customerPrice
+                ) && (
+                  <div className="mt-4 bg-red-600/20 border border-red-500/50 rounded-xl p-4">
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl">⚠️</span>
+                      <div>
+                        <div className="text-sm font-black text-red-400">Внимание: убыточные позиции!</div>
+                        <div className="text-[11px] text-red-300/70 mt-1">
+                          {(formData.assetRequirements || [])
+                            .filter(req => req.customerPrice > 0 && req.contractorPrice > 0 && req.contractorPrice >= req.customerPrice)
+                            .map(req => {
+                              const loss = req.contractorPrice - req.customerPrice;
+                              const assetName = req.type === AssetType.LOADER ? 'Погрузчик' :
+                                               req.type === AssetType.MINI_LOADER ? 'Мини-погрузчик' : 'Самосвал';
+                              return `${assetName}: убыток ${formatPrice(loss)} за единицу`;
+                            })
+                            .join(' • ')}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Итоги */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="bg-[#12192c] p-5 rounded-2xl border border-white/5">
                   <div className="text-[10px] font-black text-slate-500 uppercase mb-2">Итого клиенту</div>
-                  <div className="text-3xl font-black">{formatPrice(totals.customerTotal)}</div>
+                  <div className="text-2xl font-black">{formatPrice(totals.customerTotal)}</div>
                 </div>
-                <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5">
+                <div className="bg-[#12192c] p-5 rounded-2xl border border-white/5">
                   <div className="text-[10px] font-black text-slate-500 uppercase mb-2">Итого подрядчикам</div>
-                  <div className="text-3xl font-black text-green-400">{formatPrice(totals.contractorTotal)}</div>
+                  <div className="text-2xl font-black text-green-400">{formatPrice(totals.contractorTotal)}</div>
                 </div>
-                <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5">
+                <div className={`bg-[#12192c] p-5 rounded-2xl border ${totals.margin < 0 ? 'border-red-500/50' : 'border-white/5'}`}>
                   <div className="text-[10px] font-black text-slate-500 uppercase mb-2">Маржа</div>
-                  <div className={`text-3xl font-black ${totals.margin >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  <div className={`text-2xl font-black ${totals.margin >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                     {formatPrice(totals.margin)}
                   </div>
                 </div>
+                <div className={`bg-[#12192c] p-5 rounded-2xl border ${
+                  totals.customerTotal > 0 && (totals.margin / totals.customerTotal * 100) < 15
+                    ? 'border-orange-500/50'
+                    : 'border-white/5'
+                }`}>
+                  <div className="text-[10px] font-black text-slate-500 uppercase mb-2">Маржа %</div>
+                  <div className={`text-2xl font-black ${
+                    totals.customerTotal > 0
+                      ? (totals.margin / totals.customerTotal * 100) >= 15
+                        ? 'text-green-400'
+                        : (totals.margin / totals.customerTotal * 100) >= 0
+                          ? 'text-orange-400'
+                          : 'text-red-400'
+                      : 'text-slate-400'
+                  }`}>
+                    {totals.customerTotal > 0
+                      ? `${(totals.margin / totals.customerTotal * 100).toFixed(1)}%`
+                      : '—'}
+                  </div>
+                </div>
               </div>
+
+              {/* Предупреждение о низкой марже */}
+              {totals.customerTotal > 0 && (totals.margin / totals.customerTotal * 100) < 15 && totals.margin >= 0 && (
+                <div className="bg-orange-600/20 border border-orange-500/50 rounded-xl p-4">
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">📊</span>
+                    <div>
+                      <div className="text-sm font-black text-orange-400">Низкая маржинальность</div>
+                      <div className="text-[11px] text-orange-300/70 mt-1">
+                        Маржа {(totals.margin / totals.customerTotal * 100).toFixed(1)}% ниже рекомендуемых 15%. Рассмотрите повышение цены для клиента.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Кнопки действий */}
               <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5 flex flex-wrap gap-3">
@@ -1187,6 +1702,103 @@ const OrderForm: React.FC<OrderFormProps> = ({
                 className="flex-1 bg-blue-600 text-white py-4 rounded-xl text-[11px] font-black uppercase"
               >
                 Отправить КП
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Модалка подтверждения удаления */}
+      <ConfirmModal
+        isOpen={showDeleteConfirm}
+        title="Удаление заявки"
+        message="Удалить заявку? Она исчезнет у всех участников."
+        confirmText="Удалить"
+        confirmColor="red"
+        onConfirm={confirmDelete}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
+
+      {/* Модалка подтверждения действий с назначениями */}
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        confirmText={confirmModal.confirmText}
+        confirmColor={confirmModal.confirmColor}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+      />
+
+      {/* Модалка отправки сообщения подрядчику */}
+      {messageModal.isOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-[60] p-4">
+          <div className="bg-[#12192c] rounded-3xl p-6 max-w-md w-full shadow-2xl border border-white/10 animate-in fade-in zoom-in duration-200">
+            <h3 className="text-lg font-black uppercase tracking-tight mb-2">
+              💬 Сообщение подрядчику
+            </h3>
+            <p className="text-sm text-slate-400 mb-4">
+              Получатель: <span className="text-white font-bold">{messageModal.contractorName}</span>
+            </p>
+
+            {(() => {
+              const contractorMessages = (formData.messages || []).filter(m => {
+                const toThis = m.toRole === 'contractor' && m.toId === messageModal.contractorId;
+                const fromThis = m.fromRole === 'contractor' && m.fromId === messageModal.contractorId;
+                return toThis || fromThis;
+              });
+              return (
+                <div ref={dispatcherChatRef} className="space-y-2 max-h-48 overflow-y-auto mb-4 pr-1">
+                  {contractorMessages.length === 0 ? (
+                    <div className="text-center text-slate-500 text-[10px] uppercase py-3">
+                      Сообщений пока нет
+                    </div>
+                  ) : (
+                    contractorMessages.map(msg => {
+                      const isContractor = msg.fromRole === 'contractor';
+                      return (
+                        <div key={msg.id} className={`flex ${isContractor ? 'justify-start' : 'justify-end'}`}>
+                          <div className={`max-w-[75%] rounded-2xl p-3 ${isContractor ? 'bg-white/10 text-slate-200' : 'bg-blue-600 text-white'}`}>
+                            <div className={`text-[9px] mb-1 ${isContractor ? 'text-slate-400' : 'text-blue-100'}`}>
+                              {isContractor ? messageModal.contractorName : 'Диспетчер'} • {new Date(msg.timestamp).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}
+                            </div>
+                            <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              );
+            })()}
+
+            <textarea
+              value={messageModal.message}
+              onChange={e => setMessageModal(prev => ({ ...prev, message: e.target.value }))}
+              placeholder="Введите сообщение..."
+              rows={4}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+            />
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setMessageModal(prev => ({ ...prev, isOpen: false, message: '' }))}
+                className="flex-1 bg-white/10 text-white py-4 min-h-[48px] rounded-xl text-[11px] font-black uppercase touch-feedback active:scale-95"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={sendMessageToContractor}
+                disabled={!messageModal.message.trim()}
+                className={`flex-1 py-4 min-h-[48px] rounded-xl text-[11px] font-black uppercase touch-feedback active:scale-95 ${
+                  messageModal.message.trim()
+                    ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                    : 'bg-white/10 text-slate-500 cursor-not-allowed'
+                }`}
+              >
+                Отправить
               </button>
             </div>
           </div>

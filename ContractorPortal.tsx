@@ -1,6 +1,7 @@
-import React, { useState, useMemo, useCallback } from 'react';
-import { Order, OrderStatus, AssetType, Contractor, Bid, DriverAssignment, formatPrice, formatDateTime, generateId, PriceUnit, TripEvidence, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateAssignmentEarnings, isLoaderType, getShiftHours, toLocalDateTimeInputValue } from './types';
+﻿import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { Order, OrderStatus, AssetType, Contractor, Bid, DriverAssignment, Message, formatPrice, formatDateTime, generateId, PriceUnit, TripEvidence, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateAssignmentEarnings, isLoaderType, getShiftHours, toLocalDateTimeInputValue } from './types';
 import DriverPortal from './DriverPortal';
+import ConfirmModal from './ConfirmModal';
 
 interface ContractorPortalProps {
   orders: Order[];
@@ -9,11 +10,13 @@ interface ContractorPortalProps {
   onSubmitBid: (orderId: string, bid: Bid) => void;
   onWithdrawBid: (orderId: string, bidId: string) => void;
   onUpdateContractor: (contractor: Contractor) => void;
+  onUpdateOrder?: (orderId: string, updates: Partial<Order>) => void;
   driverName: string;
   onReportTrip: (orderId: string, evidence: TripEvidence) => void;
   onAcceptJob: (orderId: string, contractorId: string, assetType: AssetType) => void;
   onFinishWork: (orderId: string) => void;
   onUpdateDriverAssignment?: (orderId: string, driverAssignmentId: string, updates: Partial<DriverAssignment>) => void;
+  onRemoveAssignment?: (orderId: string, assignmentId: string, reason?: string) => void;
 }
 
 const ContractorPortal: React.FC<ContractorPortalProps> = ({
@@ -23,13 +26,15 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
   onSubmitBid,
   onWithdrawBid,
   onUpdateContractor,
+  onUpdateOrder,
   driverName,
   onReportTrip,
   onAcceptJob,
   onFinishWork,
-  onUpdateDriverAssignment
+  onUpdateDriverAssignment,
+  onRemoveAssignment
 }) => {
-  const [activeTab, setActiveTab] = useState<'available' | 'direct' | 'active' | 'earnings' | 'driver' | 'history'>('available');
+  const [activeTab, setActiveTab] = useState<'available' | 'direct' | 'active' | 'earnings' | 'driver'>('available');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const getDefaultArrivalTime = () => toLocalDateTimeInputValue(new Date(Date.now() + 60 * 60 * 1000));
   const [bidForm, setBidForm] = useState({
@@ -42,13 +47,36 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
   const [preBidPrices, setPreBidPrices] = useState<Record<string, string>>({});
   const [counterOfferPrices, setCounterOfferPrices] = useState<Record<string, string>>({});
   const [showBidModal, setShowBidModal] = useState(false);
+  const [chatModal, setChatModal] = useState<{ isOpen: boolean; order: Order | null; message: string }>({
+    isOpen: false,
+    order: null,
+    message: ''
+  });
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [financeSubTab, setFinanceSubTab] = useState<'active' | 'completed'>('active');
   const dateRange = useMemo<DateRange>(() => ({
     from: dateFrom || undefined,
     to: dateTo || undefined
   }), [dateFrom, dateTo]);
 
+  // Состояние модалки подтверждения
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmText?: string;
+    confirmColor?: 'red' | 'blue' | 'green';
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {}
+  });
+
+  // Реф для авто-скролла чата
+  const chatMessagesRef = useRef<HTMLDivElement>(null);
 
   // Текущий подрядчик
   const currentContractor = useMemo(() => {
@@ -61,17 +89,21 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
     return orders.filter(o => 
       o.isBirzhaOpen &&
       ![OrderStatus.COMPLETED, OrderStatus.CANCELLED].includes(normalizeOrderStatus(o.status)) &&
-      o.assetRequirements.some(req => !req.contractorId)
+      o.assetRequirements.some(req => !req.contractorId) &&
+      !(
+        (o.driverDetails || []).some(d => d.contractorId === currentContractorId && d.status !== 'cancelled') ||
+        (o.assignments || []).some(a => a.contractorId === currentContractorId && a.status !== 'cancelled')
+      )
     );
-  }, [orders]);
+  }, [orders, currentContractorId]);
 
-  // Прямые предложения (показываем всем подрядчикам, чтобы выбрать лучшего)
+  // Прямые предложения (только если диспетчер предложил именно этому подрядчику)
   const directOffers = useMemo(() => {
     return orders.filter(o =>
       ![OrderStatus.COMPLETED, OrderStatus.CANCELLED].includes(normalizeOrderStatus(o.status)) &&
-      o.assetRequirements.some(req => req.contractorId)
+      o.assetRequirements.some(req => req.contractorId === currentContractorId)
     );
-  }, [orders]);
+  }, [orders, currentContractorId]);
 
   // Активные заказы (где работает техника подрядчика)
   const activeOrders = useMemo(() => {
@@ -136,6 +168,12 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
     return 'рейсов';
   };
 
+
+  const getAssetTypeLabel = (assetType: AssetType) => {
+    if (assetType === AssetType.LOADER) return 'Погрузчик';
+    if (assetType === AssetType.MINI_LOADER) return 'Мини-погрузчик';
+    return 'Самосвал';
+  };
   const formatHours = (value: number) => {
     if (!Number.isFinite(value) || value <= 0) return '0';
     const rounded = Math.round(value * 10) / 10;
@@ -158,6 +196,64 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
     if (status === 'cancelled') return { label: 'Отменён', className: 'bg-red-500/20 text-red-400' };
     return { label: 'Назначен', className: 'bg-slate-500/20 text-slate-300' };
   };
+
+  const getContractorMessages = useCallback((order: Order) => {
+    const messages = order.messages || [];
+    return messages
+      .filter(msg => {
+        const toThisContractor = msg.toRole === 'contractor' && (!msg.toId || msg.toId === currentContractorId);
+        const fromThisContractor = msg.fromRole === 'contractor' && msg.fromId === currentContractorId;
+        return toThisContractor || fromThisContractor;
+      })
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }, [currentContractorId]);
+
+  const openChat = useCallback((order: Order) => {
+    setChatModal({ isOpen: true, order, message: '' });
+    if (!onUpdateOrder) return;
+
+    const updatedMessages = (order.messages || []).map(msg => {
+      const shouldMarkRead =
+        msg.toRole === 'contractor' &&
+        (!msg.toId || msg.toId === currentContractorId) &&
+        !msg.isRead;
+      return shouldMarkRead ? { ...msg, isRead: true, readAt: new Date().toISOString() } : msg;
+    });
+
+    const changed = (order.messages || []).some((msg, idx) => msg !== updatedMessages[idx]);
+    if (changed) {
+      const unreadCount = updatedMessages.filter(m => !m.isRead).length;
+      onUpdateOrder(order.id, { messages: updatedMessages, unreadMessages: unreadCount });
+    }
+  }, [currentContractorId, onUpdateOrder]);
+
+  const sendChatMessage = useCallback(() => {
+    if (!chatModal.order || !chatModal.message.trim() || !onUpdateOrder) return;
+    const order = chatModal.order;
+    const newMessage: Message = {
+      id: generateId(),
+      orderId: order.id,
+      fromRole: 'contractor',
+      fromName: currentContractor?.name || 'Подрядчик',
+      fromId: currentContractorId,
+      toRole: 'manager',
+      toId: order.dispatcherId || order.managerId,
+      text: chatModal.message.trim(),
+      timestamp: new Date().toISOString(),
+      isRead: false
+    };
+
+    const updatedMessages = [...(order.messages || []), newMessage];
+    onUpdateOrder(order.id, {
+      messages: updatedMessages,
+      unreadMessages: (order.unreadMessages || 0) + 1
+    });
+    setChatModal(prev => ({ ...prev, message: '' }));
+    // Авто-скролл после отправки
+    setTimeout(() => {
+      chatMessagesRef.current?.scrollTo({ top: chatMessagesRef.current.scrollHeight, behavior: 'smooth' });
+    }, 50);
+  }, [chatModal, currentContractor, currentContractorId, onUpdateOrder]);
 
   const visibleMyBids = useMemo(() => {
     return filteredMyBids.filter(entry => ['pending', 'rejected'].includes(entry.bid.status));
@@ -250,22 +346,35 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
       });
   }, [orders, currentContractorId]);
 
-  const historyByOrder = useMemo(() => {
+  // Заказы "в работе" - статус заказа НЕ завершён
+  const activeEarningsByOrder = useMemo(() => {
     return earningsByOrder.filter(entry => {
-      const myRows = entry.driverRows.filter(row => row.driver.contractorId === currentContractorId);
-      if (myRows.length === 0) return false;
-      return myRows.every(row => row.driver.status === 'completed');
+      const orderStatus = normalizeOrderStatus(entry.order.status);
+      return orderStatus !== OrderStatus.COMPLETED && orderStatus !== OrderStatus.CANCELLED;
     });
-  }, [earningsByOrder, currentContractorId]);
+  }, [earningsByOrder]);
+
+  // Завершённые заказы - статус заказа ЗАВЕРШЁН
+  const completedEarningsByOrder = useMemo(() => {
+    return earningsByOrder.filter(entry => {
+      const orderStatus = normalizeOrderStatus(entry.order.status);
+      return orderStatus === OrderStatus.COMPLETED;
+    });
+  }, [earningsByOrder]);
+
+  const filteredActiveEarningsByOrder = useMemo(() => {
+    return activeEarningsByOrder.filter(entry => isOrderInDateRange(entry.order, dateRange));
+  }, [activeEarningsByOrder, dateRange]);
 
   const filteredHistoryByOrder = useMemo(() => {
-    return historyByOrder.filter(entry => isOrderInDateRange(entry.order, dateRange));
-  }, [historyByOrder, dateRange]);
+    return completedEarningsByOrder.filter(entry => isOrderInDateRange(entry.order, dateRange));
+  }, [completedEarningsByOrder, dateRange]);
 
   // Количество единиц техники в работе (всего)
   const activeEquipmentCount = useMemo(() => {
     return filteredActiveOrders.reduce((count, order) => {
       const myDrivers = (order.driverDetails || []).filter(d => d.contractorId === currentContractorId);
+
       return count + myDrivers.length;
     }, 0);
   }, [filteredActiveOrders, currentContractorId]);
@@ -298,6 +407,18 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
     return { totalEarned, totalPending, completedOrders, totalTrips };
   }, [orders, currentContractorId]);
 
+  const chatOrder = chatModal.order
+    ? orders.find(o => o.id === chatModal.order?.id) || chatModal.order
+    : null;
+  const chatMessages = chatOrder ? getContractorMessages(chatOrder) : [];
+
+  // Авто-скролл к последнему сообщению при открытии чата или новых сообщениях
+  useEffect(() => {
+    if (chatModal.isOpen && chatMessagesRef.current) {
+      chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
+    }
+  }, [chatModal.isOpen, chatMessages.length]);
+
   // Отправка отклика
   const handleSubmitBid = useCallback(() => {
     if (!selectedOrder || !currentContractor) return;
@@ -329,9 +450,17 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 
   // Отзыв отклика
   const handleWithdrawBid = useCallback((orderId: string, bidId: string) => {
-    if (confirm('Отозвать отклик?')) {
-      onWithdrawBid(orderId, bidId);
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Отзыв отклика',
+      message: 'Вы уверены, что хотите отозвать свой отклик на этот заказ?',
+      confirmText: 'Отозвать',
+      confirmColor: 'red',
+      onConfirm: () => {
+        onWithdrawBid(orderId, bidId);
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+      }
+    });
   }, [onWithdrawBid]);
 
   const submitLowerPriceOffer = (order: Order, bid: Bid, priceInput: string, key: string) => {
@@ -423,53 +552,45 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 
         {/* Tabs */}
         <div className="flex bg-[#1c2641] p-1 rounded-xl border border-white/5 gap-1 overflow-x-auto no-scrollbar">
-          <button 
-            onClick={() => setActiveTab('available')} 
-            className={`flex-1 py-2.5 text-[8px] font-black uppercase rounded-lg transition-all whitespace-nowrap px-3 ${
+          <button
+            onClick={() => setActiveTab('available')}
+            className={`flex-shrink-0 py-3 min-h-[44px] text-[9px] font-black uppercase rounded-lg transition-all whitespace-nowrap px-4 touch-feedback ${
               activeTab === 'available' ? 'bg-blue-600 text-white shadow-xl' : 'text-slate-500'
             }`}
           >
             🌐 Биржа {filteredAvailableOrders.length > 0 && `(${filteredAvailableOrders.length})`}
           </button>
-          <button 
-            onClick={() => setActiveTab('direct')} 
-            className={`flex-1 py-2.5 text-[8px] font-black uppercase rounded-lg transition-all whitespace-nowrap px-3 ${
+          <button
+            onClick={() => setActiveTab('direct')}
+            className={`flex-shrink-0 py-3 min-h-[44px] text-[9px] font-black uppercase rounded-lg transition-all whitespace-nowrap px-4 touch-feedback ${
               activeTab === 'direct' ? 'bg-orange-500 text-white shadow-xl' : 'text-slate-500'
             }`}
           >
             📨 Прямые {filteredDirectOffers.length > 0 && `(${filteredDirectOffers.length})`}
           </button>
-          <button 
-            onClick={() => setActiveTab('active')} 
-            className={`flex-1 py-2.5 text-[8px] font-black uppercase rounded-lg transition-all whitespace-nowrap px-3 ${
+          <button
+            onClick={() => setActiveTab('active')}
+            className={`flex-shrink-0 py-3 min-h-[44px] text-[9px] font-black uppercase rounded-lg transition-all whitespace-nowrap px-4 touch-feedback ${
               activeTab === 'active' ? 'bg-green-600 text-white shadow-xl' : 'text-slate-500'
             }`}
           >
             🚛 В работе {activeEquipmentCount > 0 && `(${activeEquipmentCount})`}
           </button>
-          <button 
-            onClick={() => setActiveTab('earnings')} 
-            className={`flex-1 py-2.5 text-[8px] font-black uppercase rounded-lg transition-all whitespace-nowrap px-3 ${
+          <button
+            onClick={() => setActiveTab('earnings')}
+            className={`flex-shrink-0 py-3 min-h-[44px] text-[9px] font-black uppercase rounded-lg transition-all whitespace-nowrap px-4 touch-feedback ${
               activeTab === 'earnings' ? 'bg-green-600 text-white shadow-xl' : 'text-slate-500'
             }`}
           >
             💰 Финансы
           </button>
-          <button 
-            onClick={() => setActiveTab('driver')} 
-            className={`flex-1 py-2.5 text-[8px] font-black uppercase rounded-lg transition-all whitespace-nowrap px-3 ${
+          <button
+            onClick={() => setActiveTab('driver')}
+            className={`flex-shrink-0 py-3 min-h-[44px] text-[9px] font-black uppercase rounded-lg transition-all whitespace-nowrap px-4 touch-feedback ${
               activeTab === 'driver' ? 'bg-indigo-600 text-white shadow-xl' : 'text-slate-500'
             }`}
           >
             🚛 Рейсы {filteredDriverOrdersInWork.length > 0 && `(${filteredDriverOrdersInWork.length})`}
-          </button>
-          <button 
-            onClick={() => setActiveTab('history')} 
-            className={`flex-1 py-2.5 text-[8px] font-black uppercase rounded-lg transition-all whitespace-nowrap px-3 ${
-              activeTab === 'history' ? 'bg-slate-700 text-white shadow-xl' : 'text-slate-500'
-            }`}
-          >
-            🕘 История {filteredHistoryByOrder.length > 0 && `(${filteredHistoryByOrder.length})`}
           </button>
         </div>
       </div>
@@ -516,20 +637,27 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                   Ваши отклики ({visibleMyBids.length})
                 </h4>
                 <div className="space-y-2">
-                  {visibleMyBids.map(({ order, bid }) => (
-                    <div key={bid.id} className="flex items-center justify-between bg-white/5 p-3 rounded-xl">
-                      <div>
-                        <div className="text-sm font-black">{order.address}</div>
-                        <div className="text-[9px] text-slate-500">{formatPrice(bid.proposedPrice)} • {bid.assetType}</div>
+                  {visibleMyBids.map(({ order, bid }) => {
+                    const normalizedStatus = normalizeOrderStatus(order.status);
+                    const canWithdraw = normalizedStatus !== OrderStatus.COMPLETED && normalizedStatus !== OrderStatus.CANCELLED;
+
+                    return (
+                      <div key={bid.id} className="flex items-center justify-between bg-white/5 p-3 rounded-xl">
+                        <div>
+                          <div className="text-sm font-black">{order.address}</div>
+                          <div className="text-[9px] text-slate-500">{formatPrice(bid.proposedPrice)} • {bid.assetType}</div>
+                        </div>
+                        {canWithdraw && (
+                          <button 
+                            onClick={() => handleWithdrawBid(order.id, bid.id)}
+                            className="text-[9px] text-red-400 font-black uppercase hover:text-red-300"
+                          >
+                            Отозвать
+                          </button>
+                        )}
                       </div>
-                      <button 
-                        onClick={() => handleWithdrawBid(order.id, bid.id)}
-                        className="text-[9px] text-red-400 font-black uppercase hover:text-red-300"
-                      >
-                        Отозвать
-                      </button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -688,7 +816,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
               </div>
             ) : (
               filteredDirectOffers.map(order => {
-                const directRequirements = order.assetRequirements.filter(r => r.contractorId);
+                const directRequirements = order.assetRequirements.filter(r => r.contractorId === currentContractorId);
                 
                 return (
                   <div key={order.id} className="bg-[#12192c] rounded-2xl border-2 border-orange-500/30 overflow-hidden shadow-xl">
@@ -853,9 +981,20 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                                 </div>
                               </div>
                             </div>
-                            <div className="flex items-center gap-3">
-                              {driver.status !== 'completed' ? (
-                                <>
+                            <div className="flex flex-col gap-2">
+                              <div className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase text-center ${
+                                driver.status === 'completed' ? 'bg-green-600/20 text-green-400' :
+                                driver.status === 'working' ? 'bg-green-500/20 text-green-400' :
+                                driver.status === 'en_route' ? 'bg-blue-500/20 text-blue-400' :
+                                'bg-slate-500/20 text-slate-400'
+                              }`}>
+                                {driver.status === 'completed' ? '✓ Завершено' :
+                                 driver.status === 'working' ? '⚡ В работе' :
+                                 driver.status === 'en_route' ? '🚚 В пути' :
+                                 '📋 Назначен'}
+                              </div>
+                              {driver.status !== 'completed' && (
+                                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
                                   <button
                                     type="button"
                                     onClick={() => {
@@ -866,9 +1005,9 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                                       });
                                     }}
                                     disabled={!onUpdateDriverAssignment}
-                                    className={`px-3 py-2 rounded-xl text-[9px] font-black uppercase ${
+                                    className={`flex-shrink-0 px-4 py-2.5 min-h-[44px] rounded-xl text-[9px] font-black uppercase touch-feedback ${
                                       onUpdateDriverAssignment
-                                        ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                                        ? 'bg-blue-600 hover:bg-blue-500 text-white active:scale-95'
                                         : 'bg-white/10 text-slate-500 cursor-not-allowed'
                                     }`}
                                   >
@@ -884,9 +1023,9 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                                       });
                                     }}
                                     disabled={!onUpdateDriverAssignment}
-                                    className={`px-3 py-2 rounded-xl text-[9px] font-black uppercase ${
+                                    className={`flex-shrink-0 px-4 py-2.5 min-h-[44px] rounded-xl text-[9px] font-black uppercase touch-feedback ${
                                       onUpdateDriverAssignment
-                                        ? 'bg-green-600 hover:bg-green-500 text-white'
+                                        ? 'bg-green-600 hover:bg-green-500 text-white active:scale-95'
                                         : 'bg-white/10 text-slate-500 cursor-not-allowed'
                                     }`}
                                   >
@@ -896,43 +1035,96 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                                     type="button"
                                     onClick={() => {
                                       if (!onUpdateDriverAssignment) return;
-                                      if (confirm('Отметить завершение работы для этой техники?')) {
-                                        onUpdateDriverAssignment(order.id, driver.id, {
-                                          status: 'completed',
-                                          completedAt: new Date().toISOString()
-                                        });
-                                      }
+                                      const orderId = order.id;
+                                      const driverId = driver.id;
+                                      setConfirmModal({
+                                        isOpen: true,
+                                        title: 'Завершение работы',
+                                        message: `Отметить завершение работы для ${driver.driverName}?`,
+                                        confirmText: 'Завершить',
+                                        confirmColor: 'green',
+                                        onConfirm: () => {
+                                          onUpdateDriverAssignment(orderId, driverId, {
+                                            status: 'completed',
+                                            completedAt: new Date().toISOString()
+                                          });
+                                          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                                        }
+                                      });
                                     }}
                                     disabled={!onUpdateDriverAssignment}
-                                    className={`px-3 py-2 rounded-xl text-[9px] font-black uppercase ${
+                                    className={`flex-shrink-0 px-4 py-2.5 min-h-[44px] rounded-xl text-[9px] font-black uppercase touch-feedback ${
                                       onUpdateDriverAssignment
-                                        ? 'bg-slate-800 hover:bg-slate-700 text-white'
+                                        ? 'bg-slate-700 hover:bg-slate-600 text-white active:scale-95'
                                         : 'bg-white/10 text-slate-500 cursor-not-allowed'
                                     }`}
                                   >
                                     🏁 Завершить
                                   </button>
-                                </>
-                              ) : (
-                                <div className="px-3 py-2 rounded-xl text-[9px] font-black uppercase bg-green-600/20 text-green-400">
-                                  ✓ Завершено
+                                  {/* Кнопка отзыва техники - только если статус assigned или confirmed */}
+                                  {['assigned', 'confirmed'].includes(driver.status) && onRemoveAssignment && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const orderId = order.id;
+                                        const assignmentId = driver.id;
+                                        setConfirmModal({
+                                          isOpen: true,
+                                          title: 'Отзыв техники',
+                                          message: `Вы уверены, что хотите отозвать технику "${driver.driverName}" с этого заказа? Заказ снова появится на бирже.`,
+                                          confirmText: 'Отозвать',
+                                          confirmColor: 'red',
+                                          onConfirm: () => {
+                                            onRemoveAssignment(orderId, assignmentId, 'Отозвано подрядчиком');
+                                            setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                                          }
+                                        });
+                                      }}
+                                      className="flex-shrink-0 px-4 py-2.5 min-h-[44px] rounded-xl text-[9px] font-black uppercase touch-feedback bg-red-600/20 hover:bg-red-600/40 text-red-400 active:scale-95"
+                                    >
+                                      ❌ Отозвать
+                                    </button>
+                                  )}
                                 </div>
                               )}
-                            <div className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase ${
-                              driver.status === 'completed' ? 'bg-green-600/20 text-green-400' :
-                              driver.status === 'working' ? 'bg-green-500/20 text-green-400' :
-                              driver.status === 'en_route' ? 'bg-blue-500/20 text-blue-400' :
-                              'bg-slate-500/20 text-slate-400'
-                            }`}>
-                              {driver.status === 'completed' ? 'Завершено' :
-                               driver.status === 'working' ? 'В работе' : 
-                               driver.status === 'en_route' ? 'В пути' : 
-                               'Назначен'}
-                            </div>
                             </div>
                           </div>
                         ))}
                       </div>
+
+                      {(() => {
+                        const contractorMessages = getContractorMessages(order);
+                        const lastMessage = contractorMessages[contractorMessages.length - 1];
+                        const unreadCount = contractorMessages.filter(msg =>
+                          msg.toRole === 'contractor' &&
+                          (!msg.toId || msg.toId === currentContractorId) &&
+                          !msg.isRead
+                        ).length;
+                        return (
+                          <div className="bg-white/5 p-3 rounded-xl mb-4 flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <div className="text-[9px] font-black uppercase text-slate-500 mb-1">
+                                Переписка с диспетчером
+                              </div>
+                              <div className="text-sm text-slate-200">
+                                {lastMessage ? lastMessage.text : 'Сообщений пока нет'}
+                              </div>
+                              {lastMessage && (
+                                <div className="text-[9px] text-slate-500 mt-1">
+                                  {lastMessage.fromRole === 'contractor' ? 'Вы' : 'Диспетчер'} • {formatDateTime(lastMessage.timestamp)}
+                                </div>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => openChat(order)}
+                              className="px-4 py-2 rounded-xl text-[10px] font-black uppercase bg-blue-600/20 text-blue-200 border border-blue-500/30 hover:bg-blue-600 hover:text-white transition-all"
+                            >
+                              💬 Написать {unreadCount > 0 && <span className="ml-1 text-amber-300">({unreadCount})</span>}
+                            </button>
+                          </div>
+                        );
+                      })()}
 
                       {/* Статистика */}
                       <div className="grid grid-cols-3 gap-3">
@@ -960,40 +1152,61 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
         {/* === ФИНАНСЫ === */}
         {activeTab === 'earnings' && (
           <div className="space-y-4 animate-in fade-in">
-            {/* Общая статистика */}
-            <div className="bg-gradient-to-br from-green-600 to-green-800 p-6 rounded-3xl shadow-2xl">
-              <h3 className="text-[10px] font-black uppercase tracking-widest opacity-80 mb-4">Финансовый отчёт</h3>
-              <div className="grid grid-cols-2 gap-4 mb-4">
+            {/* Общая статистика - компактная */}
+            <div className="bg-gradient-to-br from-green-600 to-green-800 p-5 rounded-2xl shadow-2xl">
+              <div className="grid grid-cols-4 gap-3">
                 <div>
-                  <div className="text-3xl font-black">{formatPrice(earningsData.totalEarned)}</div>
-                  <div className="text-[9px] uppercase opacity-70">Подтверждено</div>
+                  <div className="text-2xl font-black">{formatPrice(earningsData.totalEarned)}</div>
+                  <div className="text-[8px] uppercase opacity-70">Подтверждено</div>
                 </div>
                 <div>
-                  <div className="text-2xl font-black text-green-200">{formatPrice(earningsData.totalPending)}</div>
-                  <div className="text-[9px] uppercase opacity-70">На проверке</div>
-                </div>
-              </div>
-              <div className="pt-4 border-t border-white/20 grid grid-cols-2 gap-4 text-[10px]">
-                <div>
-                  <span className="opacity-70">Выполнено заказов:</span>
-                  <span className="font-black ml-2">{earningsData.completedOrders}</span>
+                  <div className="text-xl font-black text-green-200">{formatPrice(earningsData.totalPending)}</div>
+                  <div className="text-[8px] uppercase opacity-70">На проверке</div>
                 </div>
                 <div>
-                  <span className="opacity-70">Всего рейсов:</span>
-                  <span className="font-black ml-2">{earningsData.totalTrips}</span>
+                  <div className="text-xl font-black">{earningsData.completedOrders}</div>
+                  <div className="text-[8px] uppercase opacity-70">Заказов</div>
+                </div>
+                <div>
+                  <div className="text-xl font-black">{earningsData.totalTrips}</div>
+                  <div className="text-[8px] uppercase opacity-70">Рейсов</div>
                 </div>
               </div>
             </div>
 
-            {/* Детализация по заказам */}
-            <div className="space-y-4">
-              <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Детализация по заказам</h4>
-              {earningsByOrder.length === 0 ? (
+            {/* Суб-табы: В работе / Завершённые */}
+            <div className="flex gap-2 bg-[#12192c] p-1.5 rounded-xl">
+              <button
+                onClick={() => setFinanceSubTab('active')}
+                className={`flex-1 py-3 rounded-lg text-[10px] font-black uppercase transition-all ${
+                  financeSubTab === 'active'
+                    ? 'bg-blue-600 text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                В работе ({filteredActiveEarningsByOrder.length})
+              </button>
+              <button
+                onClick={() => setFinanceSubTab('completed')}
+                className={`flex-1 py-3 rounded-lg text-[10px] font-black uppercase transition-all ${
+                  financeSubTab === 'completed'
+                    ? 'bg-green-600 text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Завершённые ({filteredHistoryByOrder.length})
+              </button>
+            </div>
+
+            {/* Список заказов - В РАБОТЕ */}
+            {financeSubTab === 'active' && (
+              <div className="space-y-3">
+              {filteredActiveEarningsByOrder.length === 0 ? (
                 <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5 text-center text-slate-500 text-[10px] uppercase">
                   Нет данных для отображения
                 </div>
               ) : (
-                earningsByOrder.map(entry => (
+                filteredActiveEarningsByOrder.map(entry => (
                   <div key={entry.order.id} className="bg-[#12192c] p-5 rounded-2xl border border-white/5">
                     <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
                       <div>
@@ -1094,71 +1307,76 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                   </div>
                 ))
               )}
-            </div>
+              </div>
+            )}
 
-            {/* Рейтинг */}
-            <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5">
-              <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">Рейтинг компании</h4>
-              <div className="flex items-center gap-4">
+            {/* Список заказов - ЗАВЕРШЁННЫЕ */}
+            {financeSubTab === 'completed' && (
+              <div className="space-y-3">
+              {filteredHistoryByOrder.length === 0 ? (
+                <div className="bg-[#12192c] p-10 rounded-2xl border border-white/5 text-center">
+                  <div className="text-4xl mb-3 opacity-30">🕘</div>
+                  <div className="text-slate-500 text-[10px] uppercase">Нет завершённых заказов</div>
+                </div>
+              ) : (
+                filteredHistoryByOrder.map(entry => {
+                  const totalAmount = entry.totals.confirmed + entry.totals.pending;
+                  return (
+                    <div key={entry.order.id} className="bg-[#12192c] p-4 rounded-2xl border border-white/5">
+                      <div className="flex items-center justify-between gap-4 mb-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[9px] font-black text-green-400 uppercase tracking-widest">{entry.order.customer}</div>
+                          <div className="text-sm font-black truncate">{entry.order.address}</div>
+                          <div className="text-[9px] text-slate-500">{formatDateTime(entry.order.scheduledTime)}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xl font-black text-green-400">{formatPrice(totalAmount)}</div>
+                          <div className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-green-600/20 text-green-400 inline-block">
+                            ✓ Завершено
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Детали по технике */}
+                      <div className="bg-white/5 p-3 rounded-xl space-y-2">
+                        {entry.driverRows.map((row, index) => {
+                          const units = row.earnings.confirmedUnits + row.earnings.pendingUnits;
+                          const amount = row.earnings.confirmedAmount + row.earnings.pendingAmount;
+                          return (
+                            <div key={`${row.driver.id}-${index}`} className="flex items-center justify-between text-[10px]">
+                              <div>
+                                <span className="font-black">{row.driver.driverName}</span>
+                                <span className="text-slate-500 ml-2">{row.driver.assetType}</span>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-slate-400">{units} {row.unitPlural} × {formatPrice(row.earnings.pricePerUnit)} = </span>
+                                <span className="font-black text-green-400">{formatPrice(amount)}</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+              </div>
+            )}
+
+            {/* Рейтинг - компактный */}
+            <div className="bg-[#12192c] p-4 rounded-2xl border border-white/5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
                 <div className="flex">
                   {[1, 2, 3, 4, 5].map(star => (
-                    <span key={star} className={`text-2xl ${star <= contractorRating ? 'text-yellow-400' : 'text-slate-700'}`}>★</span>
+                    <span key={star} className={`text-lg ${star <= contractorRating ? 'text-yellow-400' : 'text-slate-700'}`}>★</span>
                   ))}
                 </div>
-                <div>
-                  <div className="text-xl font-black">{contractorRating.toFixed(1)}</div>
-                  <div className="text-[9px] text-slate-500">из 5.0</div>
-                </div>
+                <div className="text-lg font-black">{contractorRating.toFixed(1)}</div>
               </div>
-              <div className="mt-4 pt-4 border-t border-white/5 text-[10px] text-slate-400">
-                Выполнено заказов: {currentContractor.completedOrders}
+              <div className="text-[9px] text-slate-500">
+                Выполнено заказов: <span className="font-black text-white">{currentContractor.completedOrders}</span>
               </div>
             </div>
-          </div>
-        )}
-
-        {/* === ИСТОРИЯ === */}
-        {activeTab === 'history' && (
-          <div className="space-y-4 animate-in fade-in">
-            {filteredHistoryByOrder.length === 0 ? (
-              <div className="text-center py-20 opacity-20">
-                <div className="text-6xl mb-4">🕘</div>
-                <div className="text-[10px] font-black uppercase tracking-[0.4em]">Нет завершённых рейсов</div>
-              </div>
-            ) : (
-              filteredHistoryByOrder.map(entry => (
-                <div key={entry.order.id} className="bg-[#12192c] p-5 rounded-2xl border border-white/5">
-                  <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
-                    <div>
-                      <div className="text-[9px] font-black text-blue-400 uppercase tracking-widest mb-1">{entry.order.customer}</div>
-                      <div className="text-lg font-black">{entry.order.address}</div>
-                      <div className="text-[9px] text-slate-500">Подача: {formatDateTime(entry.order.scheduledTime)}</div>
-                    </div>
-                    <div className="flex flex-col items-end gap-2">
-                      <div className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase ${entry.statusClass}`}>
-                        {getOrderStatusLabel(entry.order.status)}
-                      </div>
-                      <div className="text-[9px] text-slate-400">Техника: {entry.driverRows.length}</div>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-3">
-                    <div className="bg-white/5 p-3 rounded-xl">
-                      <div className="text-[8px] uppercase text-slate-500">Подтверждено</div>
-                      <div className="text-lg font-black text-green-400">{formatPrice(entry.totals.confirmed)}</div>
-                    </div>
-                    <div className="bg-white/5 p-3 rounded-xl">
-                      <div className="text-[8px] uppercase text-slate-500">На проверке</div>
-                      <div className="text-lg font-black text-yellow-300">{formatPrice(entry.totals.pending)}</div>
-                    </div>
-                    <div className="bg-white/5 p-3 rounded-xl">
-                      <div className="text-[8px] uppercase text-slate-500">Всего</div>
-                      <div className="text-lg font-black">{formatPrice(entry.totals.confirmed + entry.totals.pending)}</div>
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
           </div>
         )}
 
@@ -1166,6 +1384,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
         {activeTab === 'driver' && (
           <div className="animate-in fade-in">
             <DriverPortal
+              key={`driver-${currentContractorId}`}
               orders={filteredDriverOrdersInWork}
               contractors={contractors}
               driverName={driverName}
@@ -1180,6 +1399,71 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
           </div>
         )}
       </div>
+
+      {chatModal.isOpen && chatOrder && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-50 p-4">
+          <div className="bg-[#12192c] rounded-3xl p-6 max-w-lg w-full shadow-2xl border border-white/10">
+            <h3 className="text-lg font-black uppercase tracking-tight mb-2">
+              💬 Переписка с диспетчером
+            </h3>
+            <p className="text-[10px] text-slate-500 uppercase mb-4">
+              Заказ: {chatOrder.address}
+            </p>
+
+            <div ref={chatMessagesRef} className="space-y-2 max-h-64 overflow-y-auto mb-4 pr-1">
+              {chatMessages.length === 0 ? (
+                <div className="text-center text-slate-500 text-[10px] uppercase py-6">
+                  Сообщений пока нет
+                </div>
+              ) : (
+                chatMessages.map(msg => {
+                  const isMine = msg.fromRole === 'contractor' && msg.fromId === currentContractorId;
+                  return (
+                    <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[75%] rounded-2xl p-3 ${isMine ? 'bg-blue-600 text-white' : 'bg-white/10 text-slate-200'}`}>
+                        <div className={`text-[9px] mb-1 ${isMine ? 'text-blue-100' : 'text-slate-400'}`}>
+                          {isMine ? 'Вы' : 'Диспетчер'} • {formatDateTime(msg.timestamp)}
+                        </div>
+                        <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <textarea
+              value={chatModal.message}
+              onChange={e => setChatModal(prev => ({ ...prev, message: e.target.value }))}
+              placeholder="Напишите диспетчеру..."
+              rows={3}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+            />
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setChatModal({ isOpen: false, order: null, message: '' })}
+                className="flex-1 bg-white/10 text-white py-4 min-h-[48px] rounded-xl text-[11px] font-black uppercase touch-feedback active:scale-95"
+              >
+                Закрыть
+              </button>
+              <button
+                type="button"
+                onClick={sendChatMessage}
+                disabled={!chatModal.message.trim()}
+                className={`flex-1 py-4 min-h-[48px] rounded-xl text-[11px] font-black uppercase touch-feedback active:scale-95 ${
+                  chatModal.message.trim()
+                    ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                    : 'bg-white/10 text-slate-500 cursor-not-allowed'
+                }`}
+              >
+                Отправить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Модалка отклика */}
       {showBidModal && selectedOrder && (
@@ -1234,15 +1518,15 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
             </div>
 
             <div className="flex gap-3 mt-6">
-              <button 
+              <button
                 onClick={() => setShowBidModal(false)}
-                className="flex-1 bg-white/10 text-white py-4 rounded-xl text-[11px] font-black uppercase"
+                className="flex-1 bg-white/10 text-white py-4 min-h-[48px] rounded-xl text-[11px] font-black uppercase touch-feedback active:scale-95"
               >
                 Отмена
               </button>
-              <button 
+              <button
                 onClick={handleSubmitBid}
-                className="flex-1 bg-blue-600 text-white py-4 rounded-xl text-[11px] font-black uppercase"
+                className="flex-1 bg-blue-600 text-white py-4 min-h-[48px] rounded-xl text-[11px] font-black uppercase touch-feedback active:scale-95"
               >
                 Отправить отклик
               </button>
@@ -1250,8 +1534,22 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
           </div>
         </div>
       )}
+
+      {/* Модалка подтверждения */}
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        confirmText={confirmModal.confirmText}
+        confirmColor={confirmModal.confirmColor}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 };
 
 export default ContractorPortal;
+
+
+

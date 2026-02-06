@@ -7,6 +7,7 @@ import {
   Payment,
   Contract,
   ClosingDocs,
+  Message,
   DocumentSignStatus,
   generateId,
   generateInvoiceNumber,
@@ -41,21 +42,39 @@ export default function AccountantPortal({
   const [showInvoiceForm, setShowInvoiceForm] = useState(false);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [showContractForm, setShowContractForm] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [closingDocsNotes, setClosingDocsNotes] = useState<Record<string, string>>({});
+  const [closingDocsFiles, setClosingDocsFiles] = useState<Record<string, File[]>>({});
+  const [closingDocsSending, setClosingDocsSending] = useState<Record<string, boolean>>({});
+
+  // Функция для проверки соответствия заказа поисковому запросу
+  const matchesSearch = (order: Order, query: string): boolean => {
+    if (!query) return true;
+    const q = query.toLowerCase();
+    return [
+      order.orderNumber,
+      order.customer,
+      order.address,
+      order.invoices?.map(i => i.number).join(' ')
+    ].filter(Boolean).join(' ').toLowerCase().includes(q);
+  };
 
   // Заказы, требующие выставления счетов
   const ordersNeedingInvoice = useMemo(() => {
     return orders.filter(o =>
       (o.status === OrderStatus.CONFIRMED_BY_CUSTOMER || o.status === OrderStatus.CONTRACT_SIGNING) &&
-      (!o.invoices || o.invoices.length === 0)
+      (!o.invoices || o.invoices.length === 0) &&
+      matchesSearch(o, searchQuery)
     );
-  }, [orders]);
+  }, [orders, searchQuery]);
 
   // Заказы с ожидающими оплаты счетами
   const ordersWithPendingPayments = useMemo(() => {
     return orders.filter(o =>
-      o.invoices?.some(inv => inv.status === InvoiceStatus.ISSUED || inv.status === InvoiceStatus.SENT)
+      o.invoices?.some(inv => inv.status === InvoiceStatus.ISSUED || inv.status === InvoiceStatus.SENT) &&
+      matchesSearch(o, searchQuery)
     );
-  }, [orders]);
+  }, [orders, searchQuery]);
 
   // Заказы, требующие закрывающих документов
   const ordersNeedingClosingDocs = useMemo(() => {
@@ -66,21 +85,23 @@ export default function AccountantPortal({
         OrderStatus.CLOSING_DOCS_SENT,
         OrderStatus.REPORT_READY,
       ].includes(o.status) &&
-      !o.isPaid
+      !o.isPaid &&
+      matchesSearch(o, searchQuery)
     );
-  }, [orders]);
+  }, [orders, searchQuery]);
 
   const completedOrders = useMemo(() => {
-    return orders.filter(o => o.status === OrderStatus.COMPLETED);
-  }, [orders]);
+    return orders.filter(o => o.status === OrderStatus.COMPLETED && matchesSearch(o, searchQuery));
+  }, [orders, searchQuery]);
 
   // Заказы, требующие договоров
   const ordersNeedingContracts = useMemo(() => {
     return orders.filter(o =>
       o.status === OrderStatus.CONFIRMED_BY_CUSTOMER &&
-      !o.contract
+      !o.contract &&
+      matchesSearch(o, searchQuery)
     );
-  }, [orders]);
+  }, [orders, searchQuery]);
 
   // Статистика
   const stats = useMemo(() => {
@@ -234,23 +255,98 @@ export default function AccountantPortal({
     setSelectedOrder(null);
   };
 
+  const readFileAsDataUrl = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+
   // Создание закрывающих документов
-  const handleCreateClosingDocs = (order: Order) => {
-    const docs: ClosingDocs = {
+  const handleCreateClosingDocs = async (order: Order) => {
+    if (closingDocsSending[order.id]) return;
+    setClosingDocsSending(prev => ({ ...prev, [order.id]: true }));
+
+    try {
+      const note = (closingDocsNotes[order.id] || '').trim();
+      const files = closingDocsFiles[order.id] || [];
+      const attachments = await Promise.all(
+        files.map(async file => ({
+          name: file.name,
+          url: await readFileAsDataUrl(file),
+        }))
+      );
+
+      const docs: ClosingDocs = {
+        id: generateId(),
+        orderId: order.id,
+        actNumber: `АКТ-${order.orderNumber}`,
+        actDate: new Date().toISOString().slice(0, 10),
+        status: 'sent',
+        sentAt: new Date().toISOString(),
+        createdBy: currentUserName,
+        createdAt: new Date().toISOString(),
+        attachments,
+        noteToCustomer: note,
+      };
+
+      const message: Message = {
+        id: generateId(),
+        orderId: order.id,
+        fromRole: 'accountant',
+        fromName: currentUserName,
+        fromId: currentUserId,
+        toRole: 'customer',
+        toId: order.customerId,
+        text: note || 'Закрывающие документы отправлены.',
+        attachments: attachments.map(file => ({
+          type: 'document',
+          url: file.url,
+          name: file.name,
+        })),
+        timestamp: new Date().toISOString(),
+        isRead: false,
+      };
+
+      onCreateClosingDocs(order.id, docs);
+      onUpdateOrder(order.id, {
+        closingDocs: docs,
+        status: OrderStatus.CLOSING_DOCS_SENT,
+        messages: [...(order.messages || []), message],
+        unreadMessages: (order.unreadMessages || 0) + 1,
+      });
+
+      setClosingDocsNotes(prev => ({ ...prev, [order.id]: '' }));
+      setClosingDocsFiles(prev => ({ ...prev, [order.id]: [] }));
+    } finally {
+      setClosingDocsSending(prev => ({ ...prev, [order.id]: false }));
+    }
+  };
+
+  const handleSendCustomerMessage = (order: Order) => {
+    const note = (closingDocsNotes[order.id] || '').trim();
+    if (!note) {
+      alert('Введите сообщение для клиента.');
+      return;
+    }
+    const message: Message = {
       id: generateId(),
       orderId: order.id,
-      actNumber: `АКТ-${order.orderNumber}`,
-      actDate: new Date().toISOString().slice(0, 10),
-      status: 'draft',
-      createdBy: currentUserName,
-      createdAt: new Date().toISOString(),
+      fromRole: 'accountant',
+      fromName: currentUserName,
+      fromId: currentUserId,
+      toRole: 'customer',
+      toId: order.customerId,
+      text: note,
+      timestamp: new Date().toISOString(),
+      isRead: false,
     };
-
-    onCreateClosingDocs(order.id, docs);
     onUpdateOrder(order.id, {
-      closingDocs: docs,
-      status: OrderStatus.CLOSING_DOCS_SENT,
+      messages: [...(order.messages || []), message],
+      unreadMessages: (order.unreadMessages || 0) + 1,
     });
+    setClosingDocsNotes(prev => ({ ...prev, [order.id]: '' }));
   };
 
   const handleMarkOrderPaid = (order: Order) => {
@@ -319,6 +415,25 @@ export default function AccountantPortal({
           <div className="text-3xl font-black text-red-600">{stats.overdue}</div>
           <div className="text-xs font-bold text-red-800 uppercase">Просрочено</div>
         </div>
+      </div>
+
+      {/* Поиск */}
+      <div className="relative">
+        <input
+          type="text"
+          placeholder="🔍 Поиск по номеру заказа, клиенту, адресу, номеру счёта..."
+          className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+        />
+        {searchQuery && (
+          <button
+            onClick={() => setSearchQuery('')}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+          >
+            ✕
+          </button>
+        )}
       </div>
 
       {/* Табы */}
@@ -484,35 +599,111 @@ export default function AccountantPortal({
                 {ordersNeedingClosingDocs.map(order => (
                   <div
                     key={order.id}
-                    className="border border-slate-100 rounded-xl p-4 flex items-center justify-between"
+                    className="border border-slate-100 rounded-xl p-4 space-y-3"
                   >
-                    <div>
-                      <div className="font-bold">{order.orderNumber}</div>
-                      <div className="text-sm text-slate-500">{order.customer}</div>
-                      <div className="text-xs text-slate-400">{order.address}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-xl font-black">{formatPrice(order.totalCustomerPrice || 0)}</div>
-                      <div className="mt-2 flex flex-col gap-2 items-end">
-                        <button
-                          className="px-4 py-2 bg-teal-600 text-white rounded-xl text-sm font-bold"
-                          onClick={() => handleCreateClosingDocs(order)}
-                          disabled={!!order.closingDocs}
-                        >
-                          {order.closingDocs ? 'Акт сформирован' : 'Сформировать акт'}
-                        </button>
-                        {order.isPaid ? (
-                          <span className="px-3 py-1 rounded-full text-xs font-bold bg-green-100 text-green-700">
-                            Оплачено
-                          </span>
-                        ) : (
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <div className="font-bold">{order.orderNumber}</div>
+                        <div className="text-sm text-slate-500">{order.customer}</div>
+                        <div className="text-xs text-slate-400">{order.address}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-xl font-black">{formatPrice(order.totalCustomerPrice || 0)}</div>
+                        <div className="mt-2 flex flex-col gap-2 items-end">
                           <button
-                            className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold"
-                            onClick={() => handleMarkOrderPaid(order)}
+                            className="px-4 py-2 bg-teal-600 text-white rounded-xl text-sm font-bold"
+                            onClick={() => handleCreateClosingDocs(order)}
+                            disabled={!!order.closingDocs || closingDocsSending[order.id]}
                           >
-                            Подтвердить оплату
+                            {closingDocsSending[order.id]
+                              ? 'Отправка...'
+                              : order.closingDocs
+                              ? 'Акт сформирован'
+                              : 'Сформировать акт'}
                           </button>
+                          {order.isPaid ? (
+                            <span className="px-3 py-1 rounded-full text-xs font-bold bg-green-100 text-green-700">
+                              Оплачено
+                            </span>
+                          ) : (
+                            <button
+                              className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold"
+                              onClick={() => handleMarkOrderPaid(order)}
+                            >
+                              Подтвердить оплату
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <label className="flex items-center justify-between gap-3 px-4 py-3 border border-dashed border-slate-200 rounded-xl text-xs font-bold text-slate-600 cursor-pointer hover:border-slate-400 transition-all">
+                          <span>📎 Прикрепить документы</span>
+                          <span className="text-[11px] text-slate-400">
+                            {closingDocsFiles[order.id]?.length ? `Файлов: ${closingDocsFiles[order.id]?.length}` : 'Выбрать'}
+                          </span>
+                          <input
+                            type="file"
+                            multiple
+                            accept="application/pdf,image/*"
+                            className="hidden"
+                            onChange={e => {
+                              const incoming = Array.from(e.target.files || []);
+                              if (incoming.length === 0) return;
+                              setClosingDocsFiles(prev => ({
+                                ...prev,
+                                [order.id]: [...(prev[order.id] || []), ...incoming],
+                              }));
+                              e.currentTarget.value = '';
+                            }}
+                          />
+                        </label>
+                        <div className="text-[10px] text-slate-400">Можно выбрать несколько файлов</div>
+                        {(closingDocsFiles[order.id] || []).length > 0 && (
+                          <div className="space-y-1">
+                            {(closingDocsFiles[order.id] || []).map((file, idx) => (
+                              <div key={`${order.id}-file-${idx}`} className="flex items-center justify-between text-[11px] text-slate-600 bg-slate-50 rounded-lg px-3 py-2">
+                                <span className="truncate">{file.name}</span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setClosingDocsFiles(prev => ({
+                                      ...prev,
+                                      [order.id]: (prev[order.id] || []).filter((_, i) => i !== idx),
+                                    }))
+                                  }
+                                  className="text-red-500 text-[10px] font-black uppercase hover:text-red-600"
+                                >
+                                  Удалить
+                                </button>
+                              </div>
+                            ))}
+                          </div>
                         )}
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-[10px] font-black uppercase text-slate-400">Сообщение клиенту</div>
+                        <textarea
+                          className="w-full border border-slate-200 rounded-xl p-3 text-xs text-slate-600 focus:outline-none focus:ring-2 focus:ring-slate-300"
+                          rows={3}
+                          placeholder="Напишите клиенту (например: продублировано в ЭДО)"
+                          value={closingDocsNotes[order.id] || ''}
+                          onChange={e =>
+                            setClosingDocsNotes(prev => ({
+                              ...prev,
+                              [order.id]: e.target.value,
+                            }))
+                          }
+                        />
+                        <div className="text-[10px] text-slate-400">Сообщение будет отправлено в переписку</div>
+                        <button
+                          type="button"
+                          onClick={() => handleSendCustomerMessage(order)}
+                          className="w-full px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-500"
+                        >
+                          Отправить сообщение заказчику
+                        </button>
                       </div>
                     </div>
                   </div>

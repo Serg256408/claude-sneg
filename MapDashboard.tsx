@@ -91,7 +91,11 @@ const MapDashboard: React.FC<MapDashboardProps> = ({
                       {order.customer.length > 20 ? order.customer.substring(0, 18) + '...' : order.customer}
                     </text>
                     <text x="10" y="32" fill={color} fontSize="8" fontWeight="bold" className="uppercase opacity-80">
-                      {uniqueAssignedNames.length > 0 ? uniqueAssignedNames.join(', ') : 'ПОИСК...'}
+                      {uniqueAssignedNames.length > 0
+                        ? uniqueAssignedNames.join(', ')
+                        : normalizeOrderStatus(order.status) === OrderStatus.SEARCHING_EQUIPMENT
+                          ? 'ПОИСК...'
+                          : getOrderStatusLabel(order.status)}
                     </text>
                   </g>
                 )}
@@ -170,7 +174,7 @@ const MapDashboard: React.FC<MapDashboardProps> = ({
                       uniqueAssignedNames.map(d => (
                         <span key={d} className="text-[8px] font-black bg-slate-900 text-white px-3 py-1 rounded-lg uppercase tracking-widest">{d}</span>
                       ))
-                    ) : !isClosed ? (
+                    ) : normalizeOrderStatus(order.status) === OrderStatus.SEARCHING_EQUIPMENT ? (
                       <span className="text-[8px] font-black text-orange-500 bg-orange-50 px-3 py-1 rounded-lg uppercase border border-orange-100">Ищем водителей...</span>
                     ) : null}
                  </div>

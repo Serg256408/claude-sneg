@@ -2,13 +2,59 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#0a0f1d" />
+  <meta name="format-detection" content="telephone=no" />
   <title>SnowForce Dispatch</title>
 
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
     body { font-family: 'Inter', sans-serif; }
+
+    /* iOS safe area support */
+    :root {
+      --safe-area-inset-top: env(safe-area-inset-top, 0px);
+      --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+      --safe-area-inset-left: env(safe-area-inset-left, 0px);
+      --safe-area-inset-right: env(safe-area-inset-right, 0px);
+    }
+
+    /* Better touch handling */
+    * {
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+
+    /* iOS momentum scrolling */
+    .no-scrollbar {
+      -webkit-overflow-scrolling: touch;
+    }
+
+    /* Hide scrollbar but keep functionality */
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+
+    /* Active state for touch feedback */
+    .touch-feedback:active {
+      transform: scale(0.97);
+      opacity: 0.9;
+    }
+
+    /* Large touch targets for mobile */
+    @media (max-width: 640px) {
+      button, input, select, a {
+        min-height: 44px;
+      }
+    }
   </style>
 
   <script type="importmap">

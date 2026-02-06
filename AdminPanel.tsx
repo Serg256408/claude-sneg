@@ -71,8 +71,34 @@ export default function AdminPanel({
   const [showPriceForm, setShowPriceForm] = useState(false);
   const [showVehicleForm, setShowVehicleForm] = useState(false);
   const [editingItem, setEditingItem] = useState<any>(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const settings = commissionSettings || DEFAULT_COMMISSION;
+
+  // Отфильтрованные данные по поиску
+  const filteredUsers = useMemo(() => {
+    if (!searchQuery) return users;
+    const q = searchQuery.toLowerCase();
+    return users.filter(u =>
+      [u.name, u.email, u.phone, USER_ROLE_LABELS[u.role]].filter(Boolean).join(' ').toLowerCase().includes(q)
+    );
+  }, [users, searchQuery]);
+
+  const filteredCompanies = useMemo(() => {
+    if (!searchQuery) return companies;
+    const q = searchQuery.toLowerCase();
+    return companies.filter(c =>
+      [c.name, c.inn, c.address, c.email, c.phone].filter(Boolean).join(' ').toLowerCase().includes(q)
+    );
+  }, [companies, searchQuery]);
+
+  const filteredVehicles = useMemo(() => {
+    if (!searchQuery) return vehicles;
+    const q = searchQuery.toLowerCase();
+    return vehicles.filter(v =>
+      [v.model, v.plateNumber, v.ownerName].filter(Boolean).join(' ').toLowerCase().includes(q)
+    );
+  }, [vehicles, searchQuery]);
 
   // Форма пользователя
   const [newUser, setNewUser] = useState<Partial<User>>({
@@ -233,19 +259,38 @@ export default function AdminPanel({
         <p className="text-slate-500">Управление справочниками и настройками системы</p>
       </div>
 
+      {/* Поиск */}
+      <div className="relative">
+        <input
+          type="text"
+          placeholder="🔍 Поиск по имени, телефону, роли, компании, ИНН..."
+          className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+        />
+        {searchQuery && (
+          <button
+            onClick={() => setSearchQuery('')}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+
       {/* Табы */}
       <div className="flex gap-2 border-b border-slate-200 pb-2 overflow-x-auto">
         <button
           className={`px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap ${activeTab === 'users' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200'}`}
           onClick={() => setActiveTab('users')}
         >
-          Пользователи ({users.length})
+          Пользователи ({filteredUsers.length})
         </button>
         <button
           className={`px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap ${activeTab === 'companies' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200'}`}
           onClick={() => setActiveTab('companies')}
         >
-          Компании ({companies.length})
+          Компании ({filteredCompanies.length})
         </button>
         <button
           className={`px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap ${activeTab === 'prices' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200'}`}
@@ -257,7 +302,7 @@ export default function AdminPanel({
           className={`px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap ${activeTab === 'vehicles' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200'}`}
           onClick={() => setActiveTab('vehicles')}
         >
-          Техника ({vehicles.length})
+          Техника ({filteredVehicles.length})
         </button>
         <button
           className={`px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap ${activeTab === 'commissions' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200'}`}
@@ -291,7 +336,7 @@ export default function AdminPanel({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {users.map(user => (
+                {filteredUsers.map(user => (
                   <tr key={user.id}>
                     <td className="py-3 pr-4 font-bold">{user.name}</td>
                     <td className="py-3 pr-4">{user.phone}</td>
@@ -341,7 +386,7 @@ export default function AdminPanel({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {companies.map(company => (
+                {filteredCompanies.map(company => (
                   <tr key={company.id}>
                     <td className="py-3 pr-4 font-bold">{company.name}</td>
                     <td className="py-3 pr-4">{company.inn}</td>
@@ -456,7 +501,7 @@ export default function AdminPanel({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {vehicles.map(vehicle => (
+                {filteredVehicles.map(vehicle => (
                   <tr key={vehicle.id}>
                     <td className="py-3 pr-4 font-bold">{vehicle.plateNumber}</td>
                     <td className="py-3 pr-4">{vehicle.type}</td>
