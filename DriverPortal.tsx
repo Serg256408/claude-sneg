@@ -31,6 +31,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
   onAcceptJob,
   onFinishWork,
   onUpdateDriverAssignment,
+  onUpdateOrder,
   embedded = false,
   hideCompletedAssignments = false
 }) => {
@@ -65,7 +66,83 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
     onConfirm: () => {}
   });
 
-  
+  // Состояние чата с диспетчером
+  const [chatModal, setChatModal] = useState<{ isOpen: boolean; order: Order | null; message: string }>({
+    isOpen: false,
+    order: null,
+    message: ''
+  });
+  const chatMessagesRef = useRef<HTMLDivElement>(null);
+
+  // Получаем сообщения для водителя
+  const getDriverMessages = useCallback((order: Order) => {
+    return (order.messages || [])
+      .filter(msg => {
+        const toDriver = msg.toRole === 'driver' && (!msg.toId || msg.toId === driverContractorId);
+        const fromDriver = msg.fromRole === 'driver' && msg.fromId === driverContractorId;
+        return toDriver || fromDriver;
+      })
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }, [driverContractorId]);
+
+  // Открытие чата
+  const openChat = useCallback((order: Order) => {
+    setChatModal({ isOpen: true, order, message: '' });
+    if (!onUpdateOrder) return;
+
+    // Отмечаем сообщения как прочитанные
+    const updatedMessages = (order.messages || []).map(msg => {
+      const shouldMarkRead =
+        msg.toRole === 'driver' &&
+        (!msg.toId || msg.toId === driverContractorId) &&
+        !msg.isRead;
+      return shouldMarkRead ? { ...msg, isRead: true, readAt: new Date().toISOString() } : msg;
+    });
+
+    const changed = (order.messages || []).some((msg, idx) => msg !== updatedMessages[idx]);
+    if (changed) {
+      const unreadCount = updatedMessages.filter(m => !m.isRead).length;
+      onUpdateOrder(order.id, { messages: updatedMessages, unreadMessages: unreadCount });
+    }
+  }, [driverContractorId, onUpdateOrder]);
+
+  // Отправка сообщения
+  const sendChatMessage = useCallback(() => {
+    if (!chatModal.order || !chatModal.message.trim() || !onUpdateOrder) return;
+    const order = chatModal.order;
+    const newMessage: Message = {
+      id: generateId(),
+      orderId: order.id,
+      fromRole: 'driver',
+      fromName: driverName,
+      fromId: driverContractorId,
+      toRole: 'dispatcher',
+      text: chatModal.message.trim(),
+      timestamp: new Date().toISOString(),
+      isRead: false
+    };
+
+    const updatedMessages = [...(order.messages || []), newMessage];
+    onUpdateOrder(order.id, {
+      messages: updatedMessages,
+      unreadMessages: (order.unreadMessages || 0) + 1
+    });
+    setChatModal(prev => ({ ...prev, message: '' }));
+    setTimeout(() => {
+      chatMessagesRef.current?.scrollTo({ top: chatMessagesRef.current.scrollHeight, behavior: 'smooth' });
+    }, 50);
+  }, [chatModal, driverName, driverContractorId, onUpdateOrder]);
+
+  // Авто-скролл при открытии чата
+  const chatOrder = chatModal.order ? orders.find(o => o.id === chatModal.order?.id) || chatModal.order : null;
+  const chatMessages = chatOrder ? getDriverMessages(chatOrder) : [];
+
+  useEffect(() => {
+    if (chatModal.isOpen && chatMessagesRef.current) {
+      chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
+    }
+  }, [chatModal.isOpen, chatMessages.length]);
+
   // Получаем текущее назначение водителя из выбранного заказа (для погрузчика)
   const formatHours = (value: number) => {
     if (!Number.isFinite(value) || value <= 0) return '0';
@@ -86,19 +163,42 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
   const savedLoaderEndTime = currentDriverAssignment?.shiftEndTime || '';
   const loaderShiftStarted = !!savedLoaderStartTime;
   
-  // Локальное состояние для ввода времени (пока не сохранено)
-  const [inputStartTime, setInputStartTime] = useState<string>('');
-  const [inputEndTime, setInputEndTime] = useState<string>('');
-  
-  // Синхронизация локального ввода с сохранёнными данными при смене заказа
+  // Для таймера отсчёта времени смены
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
+
+  // Время начала смены в ISO формате (для расчёта таймера)
+  const shiftStartISO = currentDriverAssignment?.startedAt || '';
+  const shiftEnded = !!savedLoaderEndTime;
+
+  // Таймер отсчёта времени смены
   useEffect(() => {
-    setInputStartTime(savedLoaderStartTime);
-    setInputEndTime(savedLoaderEndTime);
-  }, [savedLoaderStartTime, savedLoaderEndTime, currentDriverAssignment?.id]);
-  
-  // Отображаемое время: сохранённое или вводимое
-  const loaderStartTime = loaderShiftStarted ? savedLoaderStartTime : inputStartTime;
-  const loaderEndTime = loaderShiftStarted ? (inputEndTime || savedLoaderEndTime) : '';
+    if (!loaderShiftStarted || shiftEnded || !shiftStartISO) {
+      return;
+    }
+
+    // Вычисляем начальное значение
+    const startTime = new Date(shiftStartISO).getTime();
+    const updateElapsed = () => {
+      const now = Date.now();
+      setElapsedSeconds(Math.floor((now - startTime) / 1000));
+    };
+
+    updateElapsed();
+    const interval = setInterval(updateElapsed, 1000);
+    return () => clearInterval(interval);
+  }, [loaderShiftStarted, shiftEnded, shiftStartISO]);
+
+  // Форматирование времени таймера
+  const formatElapsedTime = (seconds: number) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  // Отображаемое время начала и конца
+  const loaderStartTime = savedLoaderStartTime;
+  const loaderEndTime = savedLoaderEndTime;
 
   const loaderPricing = useMemo(() => {
     if (!selectedOrder || !currentDriverAssignment || !isLoaderType(selectedOrder.type)) {
@@ -126,18 +226,32 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
     };
   }, [selectedOrder, currentDriverAssignment, loaderStartTime, loaderEndTime]);
   
-  // Функция сохранения времени смены погрузчика
-  const saveLoaderShiftTime = useCallback((field: 'shiftStartTime' | 'shiftEndTime', value: string) => {
+  // Функция начала смены погрузчика (автоматическое время)
+  const startLoaderShift = useCallback(() => {
     if (!selectedOrder || !currentDriverAssignment || !onUpdateDriverAssignment) {
       return;
     }
-    // При начале смены меняем статус на "В работе"
-    const updates: Partial<DriverAssignment> = { [field]: value };
-    if (field === 'shiftStartTime' && value) {
-      updates.status = 'working';
-      updates.startedAt = new Date().toISOString();
+    const now = new Date();
+    const timeString = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    onUpdateDriverAssignment(selectedOrder.order.id, currentDriverAssignment.id, {
+      shiftStartTime: timeString,
+      status: 'working',
+      startedAt: now.toISOString(),
+    });
+  }, [selectedOrder, currentDriverAssignment, onUpdateDriverAssignment]);
+
+  // Функция завершения смены погрузчика (автоматическое время)
+  const endLoaderShift = useCallback(() => {
+    if (!selectedOrder || !currentDriverAssignment || !onUpdateDriverAssignment) {
+      return;
     }
-    onUpdateDriverAssignment(selectedOrder.order.id, currentDriverAssignment.id, updates);
+    const now = new Date();
+    const timeString = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    onUpdateDriverAssignment(selectedOrder.order.id, currentDriverAssignment.id, {
+      shiftEndTime: timeString,
+      status: 'completed',
+      completedAt: now.toISOString(),
+    });
   }, [selectedOrder, currentDriverAssignment, onUpdateDriverAssignment]);
 
   const markAssignmentStatus = useCallback((status: DriverAssignment['status']) => {
@@ -975,73 +1089,79 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                         </div>
                         
                         {!loaderShiftStarted ? (
-                          <>
-                            <div className="mb-4">
-                              <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2 block">
-                                Время начала смены
-                              </label>
-                              <input
-                                type="time"
-                                value={inputStartTime}
-                                onChange={(e) => setInputStartTime(e.target.value)}
-                                className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-3 text-lg font-black text-center outline-none focus:border-green-500"
-                              />
+                          /* Смена ещё не начата */
+                          <div className="text-center">
+                            <div className="mb-4 text-slate-400 text-sm">
+                              Нажмите кнопку чтобы начать смену.<br/>
+                              Время зафиксируется автоматически.
                             </div>
                             <button
-                              onClick={() => {
-                                if (!inputStartTime) {
-                                  alert('Укажите время начала смены');
-                                  return;
-                                }
-                                saveLoaderShiftTime('shiftStartTime', inputStartTime);
-                              }}
-                              className="w-full bg-green-600 hover:bg-green-500 text-white py-4 min-h-[48px] rounded-2xl text-[11px] font-black uppercase tracking-widest touch-feedback active:scale-95"
+                              onClick={startLoaderShift}
+                              className="w-full bg-green-600 hover:bg-green-500 text-white py-5 min-h-[56px] rounded-2xl text-sm font-black uppercase tracking-widest touch-feedback active:scale-95"
                             >
                               ▶️ Начать смену
                             </button>
+                          </div>
+                        ) : !shiftEnded ? (
+                          /* Смена активна - показываем таймер */
+                          <>
+                            <div className="bg-white/5 p-4 rounded-xl text-center mb-4">
+                              <div className="text-[8px] text-slate-500 uppercase mb-1">Начало смены</div>
+                              <div className="text-xl font-black text-green-400">{loaderStartTime}</div>
+                            </div>
+
+                            {/* Таймер отсчёта */}
+                            <div className="bg-blue-500/20 p-6 rounded-2xl text-center mb-4 border border-blue-500/30">
+                              <div className="text-[9px] text-blue-400 uppercase mb-2 font-black">⏱️ Время работы</div>
+                              <div className="text-4xl font-black text-white font-mono tracking-wider">
+                                {formatElapsedTime(elapsedSeconds)}
+                              </div>
+                            </div>
+
+                            <button
+                              onClick={endLoaderShift}
+                              className="w-full bg-orange-600 hover:bg-orange-500 text-white py-5 min-h-[56px] rounded-2xl text-sm font-black uppercase tracking-widest touch-feedback active:scale-95"
+                            >
+                              ⏹️ Завершить смену
+                            </button>
                           </>
                         ) : (
+                          /* Смена завершена */
                           <>
                             <div className="grid grid-cols-2 gap-4 mb-4">
                               <div className="bg-white/5 p-3 rounded-xl text-center">
                                 <div className="text-[8px] text-slate-500 uppercase mb-1">Начало</div>
                                 <div className="text-xl font-black text-green-400">{loaderStartTime}</div>
                               </div>
-                              <div className="bg-white/5 p-3 rounded-xl">
-                                <label className="text-[8px] text-slate-500 uppercase mb-1 block text-center">Конец</label>
-                                <input
-                                  type="time"
-                                  value={inputEndTime}
-                                  onChange={(e) => {
-                                    setInputEndTime(e.target.value);
-                                    saveLoaderShiftTime('shiftEndTime', e.target.value);
-                                  }}
-                                  className="w-full bg-transparent text-xl font-black text-center outline-none text-orange-400"
-                                />
+                              <div className="bg-white/5 p-3 rounded-xl text-center">
+                                <div className="text-[8px] text-slate-500 uppercase mb-1">Конец</div>
+                                <div className="text-xl font-black text-orange-400">{loaderEndTime}</div>
                               </div>
                             </div>
-                            
-                            {loaderEndTime && (
-                              <div className="bg-white/5 p-3 rounded-xl text-center mb-4">
-                                <div className="text-[8px] text-slate-500 uppercase mb-1">Отработано</div>
-                                <div className="text-xl font-black">
-                                  {(() => {
-                                    const [sh, sm] = loaderStartTime.split(':').map(Number);
-                                    const [eh, em] = loaderEndTime.split(':').map(Number);
-                                    let hours = eh - sh;
-                                    let mins = em - sm;
-                                    if (mins < 0) { hours--; mins += 60; }
-                                    if (hours < 0) hours += 24;
-                                    return `${hours}ч ${mins}м`;
-                                  })()}
-                                </div>
+
+                            <div className="bg-white/5 p-4 rounded-xl text-center mb-4">
+                              <div className="text-[8px] text-slate-500 uppercase mb-1">Отработано</div>
+                              <div className="text-2xl font-black text-white">
+                                {(() => {
+                                  const [sh, sm] = loaderStartTime.split(':').map(Number);
+                                  const [eh, em] = loaderEndTime.split(':').map(Number);
+                                  let hours = eh - sh;
+                                  let mins = em - sm;
+                                  if (mins < 0) { hours--; mins += 60; }
+                                  if (hours < 0) hours += 24;
+                                  return `${hours}ч ${mins}м`;
+                                })()}
                               </div>
-                            )}
-                            
-                            <div className="bg-blue-500/10 p-3 rounded-xl text-center border border-blue-500/20">
-                              <span className="text-[9px] text-blue-400 font-black uppercase">
-                                ⏱️ Смена активна
+                            </div>
+
+                            <div className="bg-green-500/20 p-3 rounded-xl text-center border border-green-500/30">
+                              <span className="text-[9px] text-green-400 font-black uppercase">
+                                ✅ Смена завершена
                               </span>
+                            </div>
+
+                            <div className="mt-3 text-center text-[10px] text-slate-500">
+                              Корректировка времени — только через диспетчера
                             </div>
                           </>
                         )}
@@ -1067,6 +1187,42 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                       </button>
                     </div>
                   )}
+
+                  {/* Кнопка чата с диспетчером */}
+                  {(() => {
+                    const driverMessages = getDriverMessages(activeSelectedOrder);
+                    const unreadCount = driverMessages.filter(msg =>
+                      msg.toRole === 'driver' &&
+                      (!msg.toId || msg.toId === driverContractorId) &&
+                      !msg.isRead
+                    ).length;
+                    const lastMessage = driverMessages[driverMessages.length - 1];
+                    return (
+                      <div className="bg-white/5 p-4 rounded-2xl mb-4">
+                        <div className="flex items-center justify-between gap-3 mb-2">
+                          <div className="text-[9px] font-black uppercase text-slate-400">
+                            {unreadCount > 0 ? '💬 Новые сообщения' : 'Чат с диспетчером'}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => openChat(activeSelectedOrder)}
+                            className={`px-4 py-2 min-h-[44px] rounded-xl text-[10px] font-black uppercase transition-all touch-feedback active:scale-95 ${
+                              unreadCount > 0
+                                ? 'bg-blue-600 text-white animate-pulse'
+                                : 'bg-blue-600/20 text-blue-300 border border-blue-500/30 hover:bg-blue-600 hover:text-white'
+                            }`}
+                          >
+                            💬 Написать {unreadCount > 0 && `(${unreadCount})`}
+                          </button>
+                        </div>
+                        {lastMessage && (
+                          <div className="text-sm text-slate-300 line-clamp-2">
+                            <span className="text-[9px] text-slate-500">{lastMessage.fromRole === 'driver' ? 'Вы' : 'Диспетчер'}:</span> {lastMessage.text}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {/* Кнопка завершения */}
                   <button
@@ -1120,6 +1276,72 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
           </div>
         )}
       </div>
+
+      {/* Модалка чата с диспетчером */}
+      {chatModal.isOpen && chatOrder && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-50 p-4">
+          <div className="bg-[#12192c] rounded-3xl p-6 max-w-lg w-full shadow-2xl border border-white/10">
+            <h3 className="text-lg font-black uppercase tracking-tight mb-2">
+              💬 Переписка с диспетчером
+            </h3>
+            <p className="text-[10px] text-slate-500 uppercase mb-4">
+              Заказ: {chatOrder.address}
+            </p>
+
+            <div ref={chatMessagesRef} className="space-y-2 max-h-64 overflow-y-auto mb-4 pr-1">
+              {chatMessages.length === 0 ? (
+                <div className="text-center text-slate-500 text-[10px] uppercase py-6">
+                  Сообщений пока нет
+                </div>
+              ) : (
+                chatMessages.map(msg => {
+                  const isMine = msg.fromRole === 'driver';
+                  return (
+                    <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[75%] rounded-2xl p-3 ${isMine ? 'bg-blue-600 text-white' : 'bg-white/10 text-slate-200'}`}>
+                        <div className={`text-[9px] mb-1 ${isMine ? 'text-blue-100' : 'text-slate-400'}`}>
+                          {isMine ? 'Вы' : 'Диспетчер'} • {formatDateTime(msg.timestamp)}
+                        </div>
+                        <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <textarea
+              value={chatModal.message}
+              onChange={e => setChatModal(prev => ({ ...prev, message: e.target.value }))}
+              placeholder="Напишите диспетчеру..."
+              rows={3}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+            />
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setChatModal({ isOpen: false, order: null, message: '' })}
+                className="flex-1 bg-white/10 text-white py-4 min-h-[48px] rounded-xl text-[11px] font-black uppercase touch-feedback active:scale-95"
+              >
+                Закрыть
+              </button>
+              <button
+                type="button"
+                onClick={sendChatMessage}
+                disabled={!chatModal.message.trim()}
+                className={`flex-1 py-4 min-h-[48px] rounded-xl text-[11px] font-black uppercase touch-feedback active:scale-95 ${
+                  chatModal.message.trim()
+                    ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                    : 'bg-white/10 text-slate-500 cursor-not-allowed'
+                }`}
+              >
+                Отправить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Модалка подтверждения */}
       <ConfirmModal

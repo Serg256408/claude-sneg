@@ -8,16 +8,17 @@ const fontBundle: any = (pdfFonts as any).pdfMake?.vfs
 if (fontBundle?.vfs) {
   (pdfMake as any).vfs = fontBundle.vfs;
 }
-import { Order, OrderStatus, AssetType, AssetRequirement, OrderRestrictions, CustomerContact, Customer, Message, formatPrice, formatDateTime, generateId, generateOrderNumber, PriceUnit, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateOrderTotals, getUnitsForRequirement, getTripCounts, isTruckType, isLoaderType, toLocalDateTimeInputValue } from './types';
+import { Order, OrderStatus, AssetType, AssetRequirement, OrderRestrictions, CustomerContact, Customer, Message, CompanySettings, formatPrice, formatDateTime, generateId, generateOrderNumber, PriceUnit, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateOrderTotals, getUnitsForRequirement, getTripCounts, isTruckType, isLoaderType, toLocalDateTimeInputValue } from './types';
 
 interface CustomerPortalProps {
   orders: Order[];
   customers: Customer[];
+  companySettings: CompanySettings | null;
   onAddOrder: (order: Partial<Order>) => void;
   onUpdateOrder: (orderId: string, updates: Partial<Order>) => void;
 }
 
-const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAddOrder, onUpdateOrder }) => {
+const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, companySettings, onAddOrder, onUpdateOrder }) => {
   const [view, setView] = useState<'active' | 'form' | 'history' | 'order-detail'>('active');
   const [shareStatus, setShareStatus] = useState<string | null>(null);
   const [isProcessingDoc, setIsProcessingDoc] = useState<string | null>(null);
@@ -116,6 +117,45 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
     if (!selectedOrderId) return null;
     return orders.find(o => o.id === selectedOrderId);
   }, [orders, selectedOrderId]);
+
+  // Данные компании для документов (из настроек или значения по умолчанию)
+  const companyData = useMemo(() => {
+    if (companySettings) {
+      return {
+        name: companySettings.name || 'Транском',
+        fullName: companySettings.fullName || 'ООО "Транском"',
+        inn: companySettings.inn || '',
+        kpp: companySettings.kpp || '',
+        ogrn: companySettings.ogrn || '',
+        legalAddress: companySettings.legalAddress || '',
+        bankName: companySettings.bankName || '',
+        bankAccount: companySettings.bankAccount || '',
+        corrAccount: companySettings.corrAccount || '',
+        bik: companySettings.bik || '',
+        directorName: companySettings.directorName || '',
+        directorPosition: companySettings.directorPosition || 'Генеральный директор',
+        phone: companySettings.phone || '',
+        email: companySettings.email || '',
+      };
+    }
+    // Значения по умолчанию (Транском)
+    return {
+      name: 'Транском',
+      fullName: 'ООО "Транском"',
+      inn: '5001098904',
+      kpp: '500101001',
+      ogrn: '1145001001530',
+      legalAddress: 'Московская область, г. Балашиха',
+      bankName: 'Московский филиал ПАО «Промсвязьбанк»',
+      bankAccount: '40702810900000035482',
+      corrAccount: '30101810400000000555',
+      bik: '044525555',
+      directorName: 'Терехов Сергей Юрьевич',
+      directorPosition: 'Генеральный директор',
+      phone: '8-915-019-59-41',
+      email: 'Spezavtoteh@gmail.com',
+    };
+  }, [companySettings]);
 
   // Расчёт итогов по заказу
   const getConfirmedEvidences = useCallback((order: Order) => {
@@ -358,8 +398,15 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
       content: [
         { text: 'СЧЁТ НА ОПЛАТУ', style: 'header', alignment: 'center' },
         { text: `№ ${order.orderNumber || ''} от ${issueDate}`, style: 'subheader', alignment: 'center', margin: [0, 4, 0, 8] },
-        { text: 'Поставщик: ООО "SnowForce"', margin: [0, 4, 0, 0] },
-        { text: `Покупатель: ${requisites.name}`, margin: [0, 2, 0, 0] },
+        // Реквизиты поставщика (из настроек компании)
+        { text: `Поставщик: ${companyData.fullName}`, style: 'bold', margin: [0, 8, 0, 0] },
+        { text: `ИНН ${companyData.inn} / КПП ${companyData.kpp}`, margin: [0, 2, 0, 0] },
+        { text: `Адрес: ${companyData.legalAddress}`, margin: [0, 2, 0, 0] },
+        { text: `Банк: ${companyData.bankName}`, margin: [0, 2, 0, 0] },
+        { text: `Р/с: ${companyData.bankAccount}  БИК: ${companyData.bik}`, margin: [0, 2, 0, 0] },
+        { text: `К/с: ${companyData.corrAccount}`, margin: [0, 2, 0, 8] },
+        // Реквизиты покупателя
+        { text: `Покупатель: ${requisites.name}`, style: 'bold', margin: [0, 4, 0, 0] },
         requisites.inn ? { text: `ИНН: ${requisites.inn}`, margin: [0, 2, 0, 0] } : null,
         requisites.phone ? { text: `Телефон: ${requisites.phone}`, margin: [0, 2, 0, 0] } : null,
         requisites.email ? { text: `Email: ${requisites.email}`, margin: [0, 2, 0, 0] } : null,
@@ -389,17 +436,20 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
             }
           ]
         },
-        quoteData.notes ? { text: `Комментарий: ${quoteData.notes}`, margin: [0, 8, 0, 0] } : null
+        quoteData.notes ? { text: `Комментарий: ${quoteData.notes}`, margin: [0, 8, 0, 0] } : null,
+        // Подпись
+        { text: `${companyData.directorPosition}: _______________ / ${companyData.directorName} /`, margin: [0, 30, 0, 0] },
       ].filter(Boolean),
       defaultStyle: { font: 'Roboto', fontSize: 10 },
       styles: {
         header: { fontSize: 16, bold: true },
-        subheader: { fontSize: 12, bold: true }
+        subheader: { fontSize: 12, bold: true },
+        bold: { bold: true }
       }
     };
 
-    pdfMake.createPdf(docDefinition as any).download(`Счет_${order.orderNumber || 'заказ'}.pdf`);
-  }, [buildQuotePreviewData, getCustomerRequisites]);
+    pdfMake.createPdf(docDefinition as any).download(`${companyData.name}_Счет_${order.orderNumber || 'заказ'}.pdf`);
+  }, [buildQuotePreviewData, getCustomerRequisites, companyData]);
 
   const buildContractPdf = useCallback((order: Order) => {
     const quoteData = buildQuotePreviewData(order);
@@ -409,9 +459,17 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
     const docDefinition = {
       content: [
         { text: 'ДОГОВОР НА ОКАЗАНИЕ УСЛУГ', style: 'header', alignment: 'center' },
-        { text: `№ ${order.orderNumber || ''} от ${issueDate}`, alignment: 'center', margin: [0, 4, 0, 8] },
-        { text: 'Исполнитель: ООО "SnowForce"', margin: [0, 6, 0, 0] },
-        { text: `Заказчик: ${requisites.name}`, margin: [0, 2, 0, 0] },
+        { text: `№ ${order.orderNumber || ''} от ${issueDate}`, alignment: 'center', margin: [0, 4, 0, 12] },
+        // Данные исполнителя (из настроек компании)
+        { text: `Исполнитель: ${companyData.fullName}`, style: 'bold', margin: [0, 6, 0, 0] },
+        { text: `ИНН ${companyData.inn} / КПП ${companyData.kpp}, ОГРН ${companyData.ogrn}`, margin: [0, 2, 0, 0] },
+        { text: `Адрес: ${companyData.legalAddress}`, margin: [0, 2, 0, 0] },
+        { text: `Телефон: ${companyData.phone}, Email: ${companyData.email}`, margin: [0, 2, 0, 0] },
+        { text: `Банк: ${companyData.bankName}`, margin: [0, 2, 0, 0] },
+        { text: `Р/с: ${companyData.bankAccount}, БИК: ${companyData.bik}`, margin: [0, 2, 0, 0] },
+        { text: `в лице ${companyData.directorPosition} ${companyData.directorName}`, margin: [0, 2, 0, 8] },
+        // Данные заказчика
+        { text: `Заказчик: ${requisites.name}`, style: 'bold', margin: [0, 4, 0, 0] },
         requisites.inn ? { text: `ИНН: ${requisites.inn}`, margin: [0, 2, 0, 0] } : null,
         requisites.phone ? { text: `Телефон: ${requisites.phone}`, margin: [0, 2, 0, 0] } : null,
         requisites.email ? { text: `Email: ${requisites.email}`, margin: [0, 2, 0, 0] } : null,
@@ -422,23 +480,40 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
         { text: `Стоимость услуг формируется согласно коммерческому предложению и счёту. Итоговая сумма: ${formatPrice(quoteData.total)} (с НДС ${(quoteData.vatRate * 100).toFixed(0)}%).` },
         { text: '3. Сроки выполнения', style: 'section' },
         { text: `Сроки оказания услуг согласуются сторонами. Плановая дата начала работ: ${formatDateTime(order.scheduledTime).split(',')[0]}.` },
-        { text: '4. Подписи сторон', style: 'section' },
+        { text: '4. Реквизиты и подписи сторон', style: 'section' },
         {
           columns: [
-            { text: 'Исполнитель: ____________________', margin: [0, 12, 0, 0] },
-            { text: 'Заказчик: ______________________', margin: [0, 12, 0, 0] }
+            {
+              stack: [
+                { text: 'ИСПОЛНИТЕЛЬ:', style: 'bold' },
+                { text: companyData.fullName, margin: [0, 4, 0, 0] },
+                { text: `ИНН ${companyData.inn}`, margin: [0, 2, 0, 0] },
+                { text: `${companyData.directorPosition}`, margin: [0, 12, 0, 0] },
+                { text: `_____________ / ${companyData.directorName} /`, margin: [0, 4, 0, 0] },
+              ]
+            },
+            {
+              stack: [
+                { text: 'ЗАКАЗЧИК:', style: 'bold' },
+                { text: requisites.name || '____________________', margin: [0, 4, 0, 0] },
+                requisites.inn ? { text: `ИНН ${requisites.inn}`, margin: [0, 2, 0, 0] } : { text: '', margin: [0, 2, 0, 0] },
+                { text: '', margin: [0, 12, 0, 0] },
+                { text: '_____________ / ____________ /', margin: [0, 4, 0, 0] },
+              ]
+            }
           ]
         }
       ].filter(Boolean),
       defaultStyle: { font: 'Roboto', fontSize: 10 },
       styles: {
         header: { fontSize: 14, bold: true },
-        section: { fontSize: 11, bold: true, margin: [0, 10, 0, 4] }
+        section: { fontSize: 11, bold: true, margin: [0, 10, 0, 4] },
+        bold: { bold: true }
       }
     };
 
-    pdfMake.createPdf(docDefinition as any).download(`Договор_${order.orderNumber || 'заказ'}.pdf`);
-  }, [buildQuotePreviewData, getCustomerRequisites]);
+    pdfMake.createPdf(docDefinition as any).download(`${companyData.name}_Договор_${order.orderNumber || 'заказ'}.pdf`);
+  }, [buildQuotePreviewData, getCustomerRequisites, companyData]);
   const buildFullReportPdf = useCallback((order: Order) => {
     const evidences = getCustomerEvidences(order);
     const totalTrips = getCustomerTripsCount(order);
@@ -485,7 +560,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
 
     const docDefinition = {
       content: [
-        { text: 'ТРАНСКОМ', style: 'brand' },
+        { text: companyData.name.toUpperCase(), style: 'brand' },
         { text: 'Реестр выполненных рейсов', style: 'title' },
         {
           columns: [
@@ -512,6 +587,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
           },
           layout: 'lightHorizontalLines'
         },
+        { text: `${companyData.fullName}, ИНН ${companyData.inn}, тел: ${companyData.phone}`, style: 'companyFooter' },
         { text: `Сформировано: ${new Date().toLocaleDateString('ru-RU')} ${new Date().toLocaleTimeString('ru-RU')}`, style: 'footer' }
       ],
       defaultStyle: { font: 'Roboto', fontSize: 9 },
@@ -519,12 +595,13 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, onAd
         brand: { fontSize: 18, bold: true, color: '#0f172a' },
         title: { fontSize: 12, bold: true, margin: [0, 4, 0, 6] },
         meta: { fontSize: 9, color: '#475569' },
-        footer: { fontSize: 8, color: '#94a3b8', margin: [0, 8, 0, 0] }
+        companyFooter: { fontSize: 8, color: '#64748b', margin: [0, 12, 0, 2] },
+        footer: { fontSize: 8, color: '#94a3b8', margin: [0, 2, 0, 0] }
       }
     };
 
-    pdfMake.createPdf(docDefinition as any).download(`Транском_реестр_${order.orderNumber || 'заказ'}.pdf`);
-  }, [getCustomerEvidences, getCustomerTripsCount]);
+    pdfMake.createPdf(docDefinition as any).download(`${companyData.name}_реестр_${order.orderNumber || 'заказ'}.pdf`);
+  }, [getCustomerEvidences, getCustomerTripsCount, companyData]);
 
   // Форма нового заказа
   const [formData, setFormData] = useState<Partial<Order>>({
@@ -840,7 +917,7 @@ ${confirmedEvidences.map((ev, i) =>
     const totals = calculateOrderTotalsLocal(order);
     const statusLabel = getOrderStatusLabel(order.status);
     const message = encodeURIComponent(
-      `Отчёт SnowForce\n\n` +
+      `Отчёт ${companyData.name}\n\n` +
       `Статус: ${statusLabel}\n` +
       `Объект: ${order.address}\n` +
       `Рейсов: ${totals.totalTrips}\n` +
@@ -853,9 +930,9 @@ ${confirmedEvidences.map((ev, i) =>
     } else if (channel === 'whatsapp') {
       window.open(`https://wa.me/?text=${message}`, '_blank');
     } else {
-      window.open(`mailto:?subject=Отчёт SnowForce ${order.orderNumber}&body=${message}`, '_blank');
+      window.open(`mailto:?subject=Отчёт ${companyData.name} ${order.orderNumber}&body=${message}`, '_blank');
     }
-  }, [buildContractPdf, buildInvoicePdf, calculateOrderTotalsLocal]);
+  }, [buildContractPdf, buildInvoicePdf, calculateOrderTotalsLocal, companyData]);
 
   const downloadAttachment = useCallback((attachment: { url: string; name?: string }) => {
     if (!attachment?.url) return;
@@ -868,14 +945,152 @@ ${confirmedEvidences.map((ev, i) =>
     document.body.removeChild(link);
   }, []);
 
-  const downloadClosingDocs = useCallback((order: Order) => {
-    const attachments = order.closingDocs?.attachments || [];
-    if (attachments.length > 0) {
-      attachments.forEach(att => downloadAttachment(att));
-      return;
+  const downloadClosingDocs = useCallback(async (order: Order) => {
+    setIsProcessingDoc('act');
+
+    try {
+      const zip = new JSZip();
+      const attachments = order.closingDocs?.attachments || [];
+      let addedFiles = 0;
+
+      // Добавляем прикреплённые документы (если есть)
+      for (const att of attachments) {
+        if (!att.url) continue;
+        try {
+          const response = await fetch(att.url);
+          const blob = await response.blob();
+          const fileName = att.name || `document_${addedFiles + 1}`;
+          zip.file(fileName, blob);
+          addedFiles++;
+        } catch {
+          // пропускаем ошибки загрузки
+        }
+      }
+
+      // Генерируем акт выполненных работ в PDF
+      const totals = calculateOrderTotalsLocal(order);
+      const getUnitsForReq = (req: AssetRequirement) => {
+        return getUnitsForRequirement(order, req, { mode: 'actual_or_planned' });
+      };
+
+      const docDefinition = {
+        pageSize: 'A4',
+        pageMargins: [40, 60, 40, 60],
+        defaultStyle: { font: 'Roboto', fontSize: 10 },
+        content: [
+          { text: `АКТ ВЫПОЛНЕННЫХ РАБОТ`, style: 'header', alignment: 'center', margin: [0, 0, 0, 20] },
+          { text: `Заказ №${order.orderNumber || order.id}`, alignment: 'center', margin: [0, 0, 0, 10] },
+          { text: `Дата: ${formatDateTime(new Date().toISOString())}`, alignment: 'center', margin: [0, 0, 0, 20] },
+
+          { text: 'Исполнитель:', bold: true, margin: [0, 10, 0, 5] },
+          { text: companyData.name, margin: [0, 0, 0, 2] },
+          { text: `ИНН: ${companyData.inn}`, margin: [0, 0, 0, 2] },
+          { text: `Адрес: ${companyData.address}`, margin: [0, 0, 0, 10] },
+
+          { text: 'Заказчик:', bold: true, margin: [0, 10, 0, 5] },
+          { text: order.customer, margin: [0, 0, 0, 2] },
+          { text: `Объект: ${order.address}`, margin: [0, 0, 0, 20] },
+
+          { text: 'Выполненные работы:', bold: true, margin: [0, 10, 0, 10] },
+          {
+            table: {
+              headerRows: 1,
+              widths: ['*', 'auto', 'auto', 'auto'],
+              body: [
+                [
+                  { text: 'Услуга', bold: true, fillColor: '#f0f0f0' },
+                  { text: 'Кол-во', bold: true, fillColor: '#f0f0f0', alignment: 'center' },
+                  { text: 'Цена', bold: true, fillColor: '#f0f0f0', alignment: 'right' },
+                  { text: 'Сумма', bold: true, fillColor: '#f0f0f0', alignment: 'right' }
+                ],
+                ...(order.assetRequirements || []).map(req => {
+                  const units = getUnitsForReq(req);
+                  const unitLabel = req.priceUnit === 'PER_HOUR' ? 'ч' : 'рейс';
+                  const lineTotal = (req.customerPrice || 0) * units * (req.quantity || 1);
+                  return [
+                    { text: `${req.assetType} (${req.quantity || 1} ед.)` },
+                    { text: `${units} ${unitLabel}`, alignment: 'center' },
+                    { text: formatPrice(req.customerPrice || 0), alignment: 'right' },
+                    { text: formatPrice(lineTotal), alignment: 'right' }
+                  ];
+                })
+              ]
+            },
+            margin: [0, 0, 0, 20]
+          },
+
+          { text: `ИТОГО: ${formatPrice(totals.grandTotal)}`, bold: true, fontSize: 14, alignment: 'right', margin: [0, 10, 0, 5] },
+          { text: `В т.ч. НДС 20%: ${formatPrice(totals.grandTotal * 0.2 / 1.2)}`, alignment: 'right', margin: [0, 0, 0, 30] },
+
+          {
+            columns: [
+              { text: 'Исполнитель: _________________', width: '50%' },
+              { text: 'Заказчик: _________________', width: '50%', alignment: 'right' }
+            ],
+            margin: [0, 30, 0, 0]
+          }
+        ],
+        styles: {
+          header: { fontSize: 16, bold: true }
+        }
+      };
+
+      // Создаём PDF как blob и добавляем в архив
+      const pdfBlob = await new Promise<Blob>((resolve) => {
+        pdfMake.createPdf(docDefinition as any).getBlob((blob: Blob) => {
+          resolve(blob);
+        });
+      });
+      zip.file(`Акт_${order.orderNumber || order.id}.pdf`, pdfBlob);
+      addedFiles++;
+
+      // Добавляем счёт-фактуру если есть оплаченные счета
+      if (order.invoices && order.invoices.length > 0) {
+        const paidInvoice = order.invoices.find(inv => inv.status === 'paid') || order.invoices[0];
+        const invoiceDoc = {
+          pageSize: 'A4',
+          pageMargins: [40, 60, 40, 60],
+          defaultStyle: { font: 'Roboto', fontSize: 10 },
+          content: [
+            { text: `СЧЁТ-ФАКТУРА №${paidInvoice.number}`, style: 'header', alignment: 'center', margin: [0, 0, 0, 20] },
+            { text: `от ${paidInvoice.date}`, alignment: 'center', margin: [0, 0, 0, 20] },
+            { text: `Сумма: ${formatPrice(paidInvoice.amount)}`, bold: true, alignment: 'center' },
+            { text: `НДС: ${formatPrice(paidInvoice.vatAmount || 0)}`, alignment: 'center' },
+          ]
+        };
+        const invoiceBlob = await new Promise<Blob>((resolve) => {
+          pdfMake.createPdf(invoiceDoc as any).getBlob((blob: Blob) => resolve(blob));
+        });
+        zip.file(`Счёт-фактура_${paidInvoice.number}.pdf`, invoiceBlob);
+        addedFiles++;
+      }
+
+      // Генерируем и скачиваем ZIP
+      const zipBlob = await zip.generateAsync({
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 }
+      });
+
+      const url = URL.createObjectURL(zipBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Закрывающие_документы_${order.orderNumber || order.id}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      setShareStatus(`Архив закрывающих документов (${addedFiles} файлов) скачан.`);
+      setTimeout(() => setShareStatus(null), 4000);
+    } catch (err) {
+      console.error('Ошибка создания архива:', err);
+      setShareStatus('Ошибка при создании архива документов.');
+      setTimeout(() => setShareStatus(null), 4000);
+    } finally {
+      setIsProcessingDoc(null);
     }
-    generateReport(order, 'act');
-  }, [downloadAttachment, generateReport]);
+  }, [calculateOrderTotalsLocal, companyData]);
 
   // Подтверждение условий
   const handleConfirmOrder = useCallback((orderId: string, urgent: boolean = false) => {
@@ -937,9 +1152,33 @@ ${confirmedEvidences.map((ev, i) =>
       address: order.address,
       restrictions: order.restrictions,
       contactInfo: order.contactInfo,
-      assetRequirements: order.assetRequirements.map(req => ({ ...req, id: generateId() })),
+      // Копируем требования но очищаем назначенную технику и подрядчиков
+      assetRequirements: order.assetRequirements.map(req => ({
+        id: generateId(),
+        assetType: req.assetType,
+        type: req.type,
+        quantity: req.quantity,
+        customerPrice: req.customerPrice,
+        contractorPrice: req.contractorPrice,
+        priceUnit: req.priceUnit,
+        trips: req.trips,
+        hours: req.hours,
+        // Очищаем назначения - на новый заказ поедет другая техника
+        contractorId: undefined,
+        contractorName: undefined,
+        vehicleId: undefined,
+        vehiclePlate: undefined,
+        driverId: undefined,
+        driverName: undefined,
+      })),
       plannedTrips: order.plannedTrips,
-      scheduledTime: toLocalDateTimeInputValue(new Date(Date.now() + 3600000))
+      scheduledTime: toLocalDateTimeInputValue(new Date(Date.now() + 3600000)),
+      // Очищаем все назначения и статусы
+      assignments: [],
+      driverDetails: [],
+      bids: [],
+      applicants: [],
+      evidences: [],
     });
     setView('form');
   }, [formData]);
@@ -1156,7 +1395,8 @@ ${confirmedEvidences.map((ev, i) =>
                 const needsConfirmation = normalizeOrderStatus(order.status) === OrderStatus.AWAITING_CUSTOMER;
                 const isClosingDocsPriority = order.status === OrderStatus.CLOSING_DOCS_SENT;
                 const currentQuote = order.currentQuote;
-                const accountantMessages = (order.messages || []).filter(m => m.fromRole === 'accountant');
+                const accountantMessages = (order.messages || []).filter(m => m.fromRole === 'accountant' && (!m.toRole || m.toRole === 'customer'));
+                const unreadAccountantCount = accountantMessages.filter(m => !m.isRead).length;
                 const managerMessages = (order.messages || []).filter(m => m.fromRole === 'dispatcher' && (!m.toRole || m.toRole === 'customer'));
                 const unreadManagerCount = managerMessages.filter(m => !m.isRead).length;
 
@@ -1453,23 +1693,27 @@ ${confirmedEvidences.map((ev, i) =>
                         <button
                           type="button"
                           onClick={() => openManagerChat(order)}
-                          className={`flex-1 min-w-[100px] text-center py-3 rounded-xl text-[10px] font-black uppercase border transition-all ${
-                            unreadManagerCount > 0
-                              ? 'bg-emerald-600 text-white border-emerald-500 animate-pulse'
-                              : 'bg-emerald-600/20 text-emerald-400 border-emerald-500/20 hover:bg-emerald-600 hover:text-white'
-                          }`}
+                          className="relative flex-1 min-w-[100px] text-center py-3 rounded-xl text-[10px] font-black uppercase border transition-all bg-emerald-600/20 text-emerald-400 border-emerald-500/20 hover:bg-emerald-600 hover:text-white"
                         >
-                          {unreadManagerCount > 0 && <span className="mr-1">💬</span>}
-                          Написать менеджеру
-                          {unreadManagerCount > 0 && <span className="ml-1 bg-white/20 px-1.5 rounded">+{unreadManagerCount}</span>}
+                          💬 Написать менеджеру
+                          {unreadManagerCount > 0 && (
+                            <span className="absolute -top-2 -right-2 min-w-[20px] h-[20px] flex items-center justify-center bg-red-500 text-white text-[10px] font-black rounded-full px-1 shadow-lg">
+                              {unreadManagerCount}
+                            </span>
+                          )}
                         </button>
                         {[OrderStatus.AWAITING_CLOSING_DOCS, OrderStatus.CLOSING_DOCS_SENT, OrderStatus.REPORT_READY, OrderStatus.COMPLETED].includes(order.status) && (
                           <button
                             type="button"
                             onClick={() => openAccountantChat(order)}
-                            className="flex-1 min-w-[100px] bg-blue-600/20 text-blue-400 text-center py-3 rounded-xl text-[10px] font-black uppercase border border-blue-500/20 hover:bg-blue-600 hover:text-white transition-all"
+                            className="relative flex-1 min-w-[100px] text-center py-3 rounded-xl text-[10px] font-black uppercase border transition-all bg-amber-500/20 text-amber-200 border-amber-400/30 hover:bg-amber-500/40"
                           >
-                            Написать бухгалтеру
+                            💬 Написать бухгалтеру
+                            {unreadAccountantCount > 0 && (
+                              <span className="absolute -top-2 -right-2 min-w-[20px] h-[20px] flex items-center justify-center bg-red-500 text-white text-[10px] font-black rounded-full px-1 shadow-lg">
+                                {unreadAccountantCount}
+                              </span>
+                            )}
                           </button>
                         )}
                       </div>
@@ -1501,46 +1745,6 @@ ${confirmedEvidences.map((ev, i) =>
                               </>
                             );
                           })()}
-                        </div>
-                      </div>
-                    )}
-                    {accountantMessages.length > 0 && (
-                      <div className="p-4 border-t border-white/5 bg-white/[0.02]">
-                        <div className="flex items-center justify-between gap-3 mb-3">
-                          <div className="text-[9px] font-black uppercase tracking-widest text-amber-200">
-                            Сообщения бухгалтера
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => openAccountantChat(order)}
-                            className="px-3 py-1 rounded-lg bg-amber-500/20 text-amber-200 text-[9px] font-black uppercase border border-amber-400/30 hover:bg-amber-500/30 transition-all"
-                          >
-                            Ответить
-                          </button>
-                        </div>
-                        <div className="space-y-2">
-                          {accountantMessages.map(msg => (
-                            <div key={msg.id} className="bg-white/5 rounded-xl p-3">
-                              <div className="text-[9px] text-slate-500 mb-1">
-                                {msg.fromName} • {formatDateTime(msg.timestamp)}
-                              </div>
-                              <div className="text-sm text-slate-200 whitespace-pre-wrap">{msg.text}</div>
-                              {msg.attachments?.length ? (
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                  {msg.attachments.map((att, idx) => (
-                                    <button
-                                      key={`${msg.id}-${idx}`}
-                                      type="button"
-                                      onClick={() => downloadAttachment(att)}
-                                      className="px-3 py-1 rounded-lg bg-amber-500/20 text-amber-200 text-[9px] font-black uppercase border border-amber-400/30 hover:bg-amber-500/30 transition-all"
-                                    >
-                                      Документ: {att.name || `Документ ${idx + 1}`}
-                                    </button>
-                                  ))}
-                                </div>
-                              ) : null}
-                            </div>
-                          ))}
                         </div>
                       </div>
                     )}
@@ -2024,6 +2228,24 @@ ${confirmedEvidences.map((ev, i) =>
                           {isMine ? 'Вы' : 'Бухгалтер'} • {formatDateTime(msg.timestamp)}
                         </div>
                         <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
+                        {msg.attachments && msg.attachments.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {msg.attachments.map((att, idx) => (
+                              <button
+                                key={idx}
+                                type="button"
+                                onClick={() => downloadAttachment(att)}
+                                className={`px-2 py-1 rounded-lg text-[9px] font-bold ${
+                                  isMine
+                                    ? 'bg-blue-500/50 text-blue-100 hover:bg-blue-500/70'
+                                    : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'
+                                }`}
+                              >
+                                📎 {att.name || `Документ ${idx + 1}`}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );

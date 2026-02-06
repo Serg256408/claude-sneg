@@ -1,4 +1,13 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
+import JSZip from 'jszip';
+import pdfMake from 'pdfmake/build/pdfmake';
+import * as pdfFonts from 'pdfmake/build/vfs_fonts';
+const fontBundle: any = (pdfFonts as any).pdfMake?.vfs
+  ? (pdfFonts as any).pdfMake
+  : (pdfFonts as any).default?.pdfMake;
+if (fontBundle?.vfs) {
+  (pdfMake as any).vfs = fontBundle.vfs;
+}
 import {
   Order,
   OrderStatus,
@@ -14,6 +23,8 @@ import {
   generateContractNumber,
   formatPrice,
   formatDateTime,
+  AssetRequirement,
+  getUnitsForRequirement,
 } from './types';
 
 interface AccountantPortalProps {
@@ -46,6 +57,14 @@ export default function AccountantPortal({
   const [closingDocsNotes, setClosingDocsNotes] = useState<Record<string, string>>({});
   const [closingDocsFiles, setClosingDocsFiles] = useState<Record<string, File[]>>({});
   const [closingDocsSending, setClosingDocsSending] = useState<Record<string, boolean>>({});
+
+  // Состояние чата с клиентом
+  const [chatModal, setChatModal] = useState<{ open: boolean; orderId: string | null }>({ open: false, orderId: null });
+
+  // Состояние для просмотра завершённого заказа
+  const [viewingCompletedOrder, setViewingCompletedOrder] = useState<Order | null>(null);
+  const [isDownloadingDocs, setIsDownloadingDocs] = useState(false);
+  const [chatMessage, setChatMessage] = useState('');
 
   // Функция для проверки соответствия заказа поисковому запросу
   const matchesSearch = (order: Order, query: string): boolean => {
@@ -114,6 +133,183 @@ export default function AccountantPortal({
     ).length;
     return { totalInvoiced, totalPaid, overdue, pendingInvoices: ordersNeedingInvoice.length };
   }, [orders, ordersNeedingInvoice]);
+
+  // Функции чата с клиентом
+  const getCustomerMessages = (order: Order): Message[] => {
+    return (order.messages || []).filter(
+      m =>
+        (m.fromRole === 'accountant' && m.toRole === 'customer') ||
+        (m.fromRole === 'customer' && m.toRole === 'accountant')
+    );
+  };
+
+  const getUnreadFromCustomer = (order: Order): number => {
+    return (order.messages || []).filter(
+      m => m.fromRole === 'customer' && m.toRole === 'accountant' && !m.isRead
+    ).length;
+  };
+
+  const openCustomerChat = (order: Order) => {
+    // Помечаем сообщения от клиента как прочитанные
+    const updatedMessages = (order.messages || []).map(m =>
+      m.fromRole === 'customer' && m.toRole === 'accountant' && !m.isRead
+        ? { ...m, isRead: true }
+        : m
+    );
+    const hadUnread = updatedMessages.some((m, i) => (order.messages || [])[i]?.isRead !== m.isRead);
+    if (hadUnread) {
+      onUpdateOrder(order.id, { messages: updatedMessages });
+    }
+    setChatModal({ open: true, orderId: order.id });
+  };
+
+  const sendChatMessage = () => {
+    if (!chatModal.orderId || !chatMessage.trim()) return;
+    const order = orders.find(o => o.id === chatModal.orderId);
+    if (!order) return;
+
+    const message: Message = {
+      id: generateId(),
+      orderId: order.id,
+      fromRole: 'accountant',
+      fromName: currentUserName,
+      fromId: currentUserId,
+      toRole: 'customer',
+      toId: order.customerId,
+      text: chatMessage.trim(),
+      timestamp: new Date().toISOString(),
+      isRead: false,
+    };
+
+    onUpdateOrder(order.id, {
+      messages: [...(order.messages || []), message],
+      unreadMessages: (order.unreadMessages || 0) + 1,
+    });
+    setChatMessage('');
+  };
+
+  const chatOrder = chatModal.orderId ? orders.find(o => o.id === chatModal.orderId) : null;
+  const chatMessages = chatOrder ? getCustomerMessages(chatOrder) : [];
+
+  // Скачивание закрывающих документов в ZIP
+  const downloadClosingDocsZip = useCallback(async (order: Order) => {
+    setIsDownloadingDocs(true);
+    try {
+      const zip = new JSZip();
+      const attachments = order.closingDocs?.attachments || [];
+      let addedFiles = 0;
+
+      // Добавляем прикреплённые документы
+      for (const att of attachments) {
+        if (!att.url) continue;
+        try {
+          const response = await fetch(att.url);
+          const blob = await response.blob();
+          zip.file(att.name || `document_${addedFiles + 1}`, blob);
+          addedFiles++;
+        } catch { /* skip */ }
+      }
+
+      // Генерируем акт выполненных работ
+      const getUnitsForReq = (req: AssetRequirement) => getUnitsForRequirement(order, req, { mode: 'actual_or_planned' });
+      const docDefinition = {
+        pageSize: 'A4',
+        pageMargins: [40, 60, 40, 60],
+        defaultStyle: { font: 'Roboto', fontSize: 10 },
+        content: [
+          { text: 'АКТ ВЫПОЛНЕННЫХ РАБОТ', style: 'header', alignment: 'center', margin: [0, 0, 0, 20] },
+          { text: `Заказ №${order.orderNumber || order.id}`, alignment: 'center', margin: [0, 0, 0, 10] },
+          { text: `Дата: ${formatDateTime(new Date().toISOString())}`, alignment: 'center', margin: [0, 0, 0, 20] },
+          { text: 'Заказчик:', bold: true, margin: [0, 10, 0, 5] },
+          { text: order.customer, margin: [0, 0, 0, 2] },
+          { text: `Объект: ${order.address}`, margin: [0, 0, 0, 20] },
+          { text: 'Выполненные работы:', bold: true, margin: [0, 10, 0, 10] },
+          {
+            table: {
+              headerRows: 1,
+              widths: ['*', 'auto', 'auto', 'auto'],
+              body: [
+                [
+                  { text: 'Услуга', bold: true, fillColor: '#f0f0f0' },
+                  { text: 'Кол-во', bold: true, fillColor: '#f0f0f0', alignment: 'center' },
+                  { text: 'Цена', bold: true, fillColor: '#f0f0f0', alignment: 'right' },
+                  { text: 'Сумма', bold: true, fillColor: '#f0f0f0', alignment: 'right' }
+                ],
+                ...(order.assetRequirements || []).map(req => {
+                  const units = getUnitsForReq(req);
+                  const unitLabel = req.priceUnit === 'PER_HOUR' ? 'ч' : 'рейс';
+                  const lineTotal = (req.customerPrice || 0) * units * (req.quantity || 1);
+                  return [
+                    { text: `${req.assetType} (${req.quantity || 1} ед.)` },
+                    { text: `${units} ${unitLabel}`, alignment: 'center' },
+                    { text: formatPrice(req.customerPrice || 0), alignment: 'right' },
+                    { text: formatPrice(lineTotal), alignment: 'right' }
+                  ];
+                })
+              ]
+            },
+            margin: [0, 0, 0, 20]
+          },
+          { text: `ИТОГО: ${formatPrice(order.totalCustomerPrice || 0)}`, bold: true, fontSize: 14, alignment: 'right', margin: [0, 10, 0, 5] },
+          { text: `В т.ч. НДС 20%: ${formatPrice((order.totalCustomerPrice || 0) * 0.2 / 1.2)}`, alignment: 'right', margin: [0, 0, 0, 30] },
+          {
+            columns: [
+              { text: 'Исполнитель: _________________', width: '50%' },
+              { text: 'Заказчик: _________________', width: '50%', alignment: 'right' }
+            ],
+            margin: [0, 30, 0, 0]
+          }
+        ],
+        styles: { header: { fontSize: 16, bold: true } }
+      };
+
+      const pdfBlob = await new Promise<Blob>((resolve) => {
+        pdfMake.createPdf(docDefinition as any).getBlob((blob: Blob) => resolve(blob));
+      });
+      zip.file(`Акт_${order.orderNumber || order.id}.pdf`, pdfBlob);
+      addedFiles++;
+
+      // Добавляем счета-фактуры
+      if (order.invoices && order.invoices.length > 0) {
+        for (const inv of order.invoices) {
+          const invoiceDoc = {
+            pageSize: 'A4',
+            pageMargins: [40, 60, 40, 60],
+            defaultStyle: { font: 'Roboto', fontSize: 10 },
+            content: [
+              { text: `СЧЁТ-ФАКТУРА №${inv.number}`, style: 'header', alignment: 'center', margin: [0, 0, 0, 20] },
+              { text: `от ${inv.date}`, alignment: 'center', margin: [0, 0, 0, 20] },
+              { text: `Заказ: ${order.orderNumber}`, margin: [0, 0, 0, 10] },
+              { text: `Заказчик: ${order.customer}`, margin: [0, 0, 0, 20] },
+              { text: `Сумма: ${formatPrice(inv.amount)}`, bold: true, fontSize: 14 },
+              { text: `НДС: ${formatPrice(inv.vatAmount || 0)}`, margin: [0, 5, 0, 0] },
+              { text: `Статус: ${inv.status === 'paid' ? 'Оплачен' : inv.status === 'sent' ? 'Отправлен' : 'Выставлен'}`, margin: [0, 10, 0, 0] },
+            ],
+            styles: { header: { fontSize: 16, bold: true } }
+          };
+          const invBlob = await new Promise<Blob>((resolve) => {
+            pdfMake.createPdf(invoiceDoc as any).getBlob((blob: Blob) => resolve(blob));
+          });
+          zip.file(`Счёт-фактура_${inv.number}.pdf`, invBlob);
+          addedFiles++;
+        }
+      }
+
+      const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+      const url = URL.createObjectURL(zipBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Закрывающие_документы_${order.orderNumber || order.id}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Ошибка создания архива:', err);
+    } finally {
+      setIsDownloadingDocs(false);
+    }
+  }, []);
 
   // Форма счёта
   const [newInvoice, setNewInvoice] = useState<Partial<Invoice>>({
@@ -324,31 +520,6 @@ export default function AccountantPortal({
     }
   };
 
-  const handleSendCustomerMessage = (order: Order) => {
-    const note = (closingDocsNotes[order.id] || '').trim();
-    if (!note) {
-      alert('Введите сообщение для клиента.');
-      return;
-    }
-    const message: Message = {
-      id: generateId(),
-      orderId: order.id,
-      fromRole: 'accountant',
-      fromName: currentUserName,
-      fromId: currentUserId,
-      toRole: 'customer',
-      toId: order.customerId,
-      text: note,
-      timestamp: new Date().toISOString(),
-      isRead: false,
-    };
-    onUpdateOrder(order.id, {
-      messages: [...(order.messages || []), message],
-      unreadMessages: (order.unreadMessages || 0) + 1,
-    });
-    setClosingDocsNotes(prev => ({ ...prev, [order.id]: '' }));
-  };
-
   const handleMarkOrderPaid = (order: Order) => {
     const totalPaid = (order.payments || [])
       .filter(p => p.status === 'completed')
@@ -530,6 +701,18 @@ export default function AccountantPortal({
                             Счёт {pendingInvoice.number} от {pendingInvoice.date}
                           </div>
                         )}
+                        {/* Кнопка чата с клиентом */}
+                        <button
+                          onClick={() => openCustomerChat(order)}
+                          className="mt-2 relative inline-flex items-center gap-2 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold transition-colors"
+                        >
+                          💬 Написать заказчику
+                          {getUnreadFromCustomer(order) > 0 && (
+                            <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] flex items-center justify-center bg-red-500 text-white text-[10px] font-black rounded-full px-1">
+                              {getUnreadFromCustomer(order)}
+                            </span>
+                          )}
+                        </button>
                       </div>
                       <div className="text-right">
                         <div className="text-xl font-black">{formatPrice(pendingInvoice?.amount || 0)}</div>
@@ -606,6 +789,18 @@ export default function AccountantPortal({
                         <div className="font-bold">{order.orderNumber}</div>
                         <div className="text-sm text-slate-500">{order.customer}</div>
                         <div className="text-xs text-slate-400">{order.address}</div>
+                        {/* Кнопка чата с клиентом */}
+                        <button
+                          onClick={() => openCustomerChat(order)}
+                          className="mt-2 relative inline-flex items-center gap-2 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold transition-colors"
+                        >
+                          💬 Написать заказчику
+                          {getUnreadFromCustomer(order) > 0 && (
+                            <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] flex items-center justify-center bg-red-500 text-white text-[10px] font-black rounded-full px-1">
+                              {getUnreadFromCustomer(order)}
+                            </span>
+                          )}
+                        </button>
                       </div>
                       <div className="text-right">
                         <div className="text-xl font-black">{formatPrice(order.totalCustomerPrice || 0)}</div>
@@ -636,75 +831,50 @@ export default function AccountantPortal({
                         </div>
                       </div>
                     </div>
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <div className="space-y-2">
-                        <label className="flex items-center justify-between gap-3 px-4 py-3 border border-dashed border-slate-200 rounded-xl text-xs font-bold text-slate-600 cursor-pointer hover:border-slate-400 transition-all">
-                          <span>📎 Прикрепить документы</span>
-                          <span className="text-[11px] text-slate-400">
-                            {closingDocsFiles[order.id]?.length ? `Файлов: ${closingDocsFiles[order.id]?.length}` : 'Выбрать'}
-                          </span>
-                          <input
-                            type="file"
-                            multiple
-                            accept="application/pdf,image/*"
-                            className="hidden"
-                            onChange={e => {
-                              const incoming = Array.from(e.target.files || []);
-                              if (incoming.length === 0) return;
-                              setClosingDocsFiles(prev => ({
-                                ...prev,
-                                [order.id]: [...(prev[order.id] || []), ...incoming],
-                              }));
-                              e.currentTarget.value = '';
-                            }}
-                          />
-                        </label>
-                        <div className="text-[10px] text-slate-400">Можно выбрать несколько файлов</div>
-                        {(closingDocsFiles[order.id] || []).length > 0 && (
-                          <div className="space-y-1">
-                            {(closingDocsFiles[order.id] || []).map((file, idx) => (
-                              <div key={`${order.id}-file-${idx}`} className="flex items-center justify-between text-[11px] text-slate-600 bg-slate-50 rounded-lg px-3 py-2">
-                                <span className="truncate">{file.name}</span>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setClosingDocsFiles(prev => ({
-                                      ...prev,
-                                      [order.id]: (prev[order.id] || []).filter((_, i) => i !== idx),
-                                    }))
-                                  }
-                                  className="text-red-500 text-[10px] font-black uppercase hover:text-red-600"
-                                >
-                                  Удалить
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      <div className="space-y-2">
-                        <div className="text-[10px] font-black uppercase text-slate-400">Сообщение клиенту</div>
-                        <textarea
-                          className="w-full border border-slate-200 rounded-xl p-3 text-xs text-slate-600 focus:outline-none focus:ring-2 focus:ring-slate-300"
-                          rows={3}
-                          placeholder="Напишите клиенту (например: продублировано в ЭДО)"
-                          value={closingDocsNotes[order.id] || ''}
-                          onChange={e =>
-                            setClosingDocsNotes(prev => ({
+                    {/* Прикрепление документов для акта */}
+                    <div className="space-y-2">
+                      <label className="flex items-center justify-between gap-3 px-4 py-3 border border-dashed border-slate-200 rounded-xl text-xs font-bold text-slate-600 cursor-pointer hover:border-slate-400 transition-all">
+                        <span>📎 Прикрепить документы к акту</span>
+                        <span className="text-[11px] text-slate-400">
+                          {closingDocsFiles[order.id]?.length ? `Файлов: ${closingDocsFiles[order.id]?.length}` : 'Выбрать'}
+                        </span>
+                        <input
+                          type="file"
+                          multiple
+                          accept="application/pdf,image/*"
+                          className="hidden"
+                          onChange={e => {
+                            const incoming = Array.from(e.target.files || []);
+                            if (incoming.length === 0) return;
+                            setClosingDocsFiles(prev => ({
                               ...prev,
-                              [order.id]: e.target.value,
-                            }))
-                          }
+                              [order.id]: [...(prev[order.id] || []), ...incoming],
+                            }));
+                            e.currentTarget.value = '';
+                          }}
                         />
-                        <div className="text-[10px] text-slate-400">Сообщение будет отправлено в переписку</div>
-                        <button
-                          type="button"
-                          onClick={() => handleSendCustomerMessage(order)}
-                          className="w-full px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-500"
-                        >
-                          Отправить сообщение заказчику
-                        </button>
-                      </div>
+                      </label>
+                      {(closingDocsFiles[order.id] || []).length > 0 && (
+                        <div className="space-y-1">
+                          {(closingDocsFiles[order.id] || []).map((file, idx) => (
+                            <div key={`${order.id}-file-${idx}`} className="flex items-center justify-between text-[11px] text-slate-600 bg-slate-50 rounded-lg px-3 py-2">
+                              <span className="truncate">{file.name}</span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setClosingDocsFiles(prev => ({
+                                    ...prev,
+                                    [order.id]: (prev[order.id] || []).filter((_, i) => i !== idx),
+                                  }))
+                                }
+                                className="text-red-500 text-[10px] font-black uppercase hover:text-red-600"
+                              >
+                                Удалить
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -724,17 +894,24 @@ export default function AccountantPortal({
                 {completedOrders.map(order => (
                   <div
                     key={order.id}
-                    className="border border-slate-100 rounded-xl p-4 flex items-center justify-between"
+                    onClick={() => setViewingCompletedOrder(order)}
+                    className="border border-slate-100 rounded-xl p-4 flex items-center justify-between cursor-pointer hover:border-slate-300 hover:shadow-md transition-all"
                   >
                     <div>
                       <div className="font-bold">{order.orderNumber}</div>
                       <div className="text-sm text-slate-500">{order.customer}</div>
                       <div className="text-xs text-slate-400">{order.address}</div>
+                      {/* Индикатор непрочитанных сообщений */}
+                      {getUnreadFromCustomer(order) > 0 && (
+                        <span className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-bold">
+                          💬 {getUnreadFromCustomer(order)} новых
+                        </span>
+                      )}
                     </div>
                     <div className="text-right">
                       <div className="text-xl font-black">{formatPrice(order.totalCustomerPrice || 0)}</div>
                       <span className="mt-2 inline-block px-3 py-1 rounded-full text-xs font-bold bg-green-100 text-green-700">
-                        Оплачено
+                        {order.isPaid ? 'Оплачено' : 'Завершён'}
                       </span>
                     </div>
                   </div>
@@ -925,6 +1102,261 @@ export default function AccountantPortal({
                   Отмена
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Модалка чата с клиентом */}
+      {chatModal.open && chatOrder && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setChatModal({ open: false, orderId: null })}>
+          <div className="bg-white rounded-[2rem] max-w-lg w-full max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            {/* Заголовок */}
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h3 className="font-black">Переписка с заказчиком</h3>
+                <div className="text-xs text-slate-500">
+                  {chatOrder.orderNumber} — {chatOrder.customer}
+                </div>
+              </div>
+              <button
+                onClick={() => setChatModal({ open: false, orderId: null })}
+                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-slate-100 text-slate-400"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Сообщения */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[200px] max-h-[400px]">
+              {chatMessages.length === 0 ? (
+                <div className="text-center text-slate-400 py-8">
+                  Нет сообщений. Начните переписку!
+                </div>
+              ) : (
+                chatMessages.map(msg => (
+                  <div
+                    key={msg.id}
+                    className={`flex ${msg.fromRole === 'accountant' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div
+                      className={`max-w-[80%] rounded-2xl px-4 py-2 ${
+                        msg.fromRole === 'accountant'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-100 text-slate-800'
+                      }`}
+                    >
+                      <div className="text-xs opacity-70 mb-1">
+                        {msg.fromRole === 'accountant' ? 'Вы' : msg.fromName || 'Заказчик'}
+                      </div>
+                      <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
+                      {msg.attachments && msg.attachments.length > 0 && (
+                        <div className="mt-2 space-y-1">
+                          {msg.attachments.map((att, idx) => (
+                            <a
+                              key={idx}
+                              href={att.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className={`block text-xs underline ${
+                                msg.fromRole === 'accountant' ? 'text-indigo-200' : 'text-indigo-600'
+                              }`}
+                            >
+                              📎 {att.name || 'Файл'}
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                      <div className="text-[10px] opacity-50 mt-1">
+                        {formatDateTime(msg.timestamp)}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Ввод сообщения */}
+            <div className="p-4 border-t border-slate-100">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  className="flex-1 rounded-xl border border-slate-200 px-4 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  placeholder="Введите сообщение..."
+                  value={chatMessage}
+                  onChange={e => setChatMessage(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendChatMessage();
+                    }
+                  }}
+                />
+                <button
+                  onClick={sendChatMessage}
+                  disabled={!chatMessage.trim()}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-indigo-500 transition-colors"
+                >
+                  Отправить
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Модалка просмотра завершённого заказа */}
+      {viewingCompletedOrder && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setViewingCompletedOrder(null)}>
+          <div className="bg-white rounded-[2rem] max-w-2xl w-full max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            {/* Заголовок */}
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h3 className="text-xl font-black">{viewingCompletedOrder.orderNumber}</h3>
+                <div className="text-sm text-slate-500">{viewingCompletedOrder.customer}</div>
+                <div className="text-xs text-slate-400">{viewingCompletedOrder.address}</div>
+              </div>
+              <button
+                onClick={() => setViewingCompletedOrder(null)}
+                className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-slate-100 text-slate-400 text-xl"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Контент */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* Финансы */}
+              <div className="bg-slate-50 rounded-2xl p-4">
+                <h4 className="font-black mb-3">Финансы</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <div className="text-xs text-slate-500">Сумма заказа</div>
+                    <div className="text-xl font-black">{formatPrice(viewingCompletedOrder.totalCustomerPrice || 0)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Статус оплаты</div>
+                    <span className={`inline-block px-3 py-1 rounded-full text-xs font-bold ${viewingCompletedOrder.isPaid ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                      {viewingCompletedOrder.isPaid ? 'Оплачено' : 'Ожидает оплаты'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Счета */}
+              {viewingCompletedOrder.invoices && viewingCompletedOrder.invoices.length > 0 && (
+                <div>
+                  <h4 className="font-black mb-3">Счета ({viewingCompletedOrder.invoices.length})</h4>
+                  <div className="space-y-2">
+                    {viewingCompletedOrder.invoices.map(inv => (
+                      <div key={inv.id} className="bg-slate-50 rounded-xl p-3 flex items-center justify-between">
+                        <div>
+                          <div className="font-bold text-sm">Счёт №{inv.number}</div>
+                          <div className="text-xs text-slate-500">{inv.date}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-bold">{formatPrice(inv.amount)}</div>
+                          <span className={`text-xs font-bold ${inv.status === 'paid' ? 'text-green-600' : 'text-slate-500'}`}>
+                            {inv.status === 'paid' ? 'Оплачен' : inv.status === 'sent' ? 'Отправлен' : 'Выставлен'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Закрывающие документы */}
+              {viewingCompletedOrder.closingDocs && (
+                <div>
+                  <h4 className="font-black mb-3">Закрывающие документы</h4>
+                  <div className="bg-slate-50 rounded-xl p-4">
+                    <div className="text-sm text-slate-600 mb-2">
+                      Сформированы: {formatDateTime(viewingCompletedOrder.closingDocs.createdAt)}
+                    </div>
+                    {viewingCompletedOrder.closingDocs.attachments && viewingCompletedOrder.closingDocs.attachments.length > 0 && (
+                      <div className="space-y-1 mb-3">
+                        {viewingCompletedOrder.closingDocs.attachments.map((att, idx) => (
+                          <a
+                            key={idx}
+                            href={att.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block text-sm text-indigo-600 hover:underline"
+                          >
+                            📎 {att.name || 'Документ'}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Переписка */}
+              <div>
+                <h4 className="font-black mb-3">
+                  Переписка с заказчиком
+                  {getUnreadFromCustomer(viewingCompletedOrder) > 0 && (
+                    <span className="ml-2 px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs">
+                      {getUnreadFromCustomer(viewingCompletedOrder)} новых
+                    </span>
+                  )}
+                </h4>
+                <div className="bg-slate-50 rounded-xl p-4 max-h-[250px] overflow-y-auto">
+                  {getCustomerMessages(viewingCompletedOrder).length === 0 ? (
+                    <div className="text-center text-slate-400 py-4">Нет сообщений</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {getCustomerMessages(viewingCompletedOrder).map(msg => (
+                        <div
+                          key={msg.id}
+                          className={`flex ${msg.fromRole === 'accountant' ? 'justify-end' : 'justify-start'}`}
+                        >
+                          <div
+                            className={`max-w-[80%] rounded-xl px-3 py-2 ${
+                              msg.fromRole === 'accountant'
+                                ? 'bg-indigo-600 text-white'
+                                : 'bg-white text-slate-800 border border-slate-200'
+                            }`}
+                          >
+                            <div className="text-xs opacity-70">{msg.fromRole === 'accountant' ? 'Вы' : msg.fromName || 'Заказчик'}</div>
+                            <div className="text-sm">{msg.text}</div>
+                            <div className="text-[10px] opacity-50 mt-1">{formatDateTime(msg.timestamp)}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {/* Кнопка открыть чат */}
+                <button
+                  onClick={() => {
+                    setViewingCompletedOrder(null);
+                    openCustomerChat(viewingCompletedOrder);
+                  }}
+                  className="mt-3 w-full py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-sm font-bold transition-colors"
+                >
+                  💬 Написать заказчику
+                </button>
+              </div>
+            </div>
+
+            {/* Футер с кнопками */}
+            <div className="p-6 border-t border-slate-100 flex gap-3">
+              <button
+                onClick={() => downloadClosingDocsZip(viewingCompletedOrder)}
+                disabled={isDownloadingDocs}
+                className="flex-1 py-3 bg-slate-900 text-white rounded-xl font-bold text-sm hover:bg-slate-800 transition-colors disabled:opacity-50"
+              >
+                {isDownloadingDocs ? 'Генерация...' : '📦 Скачать документы (ZIP)'}
+              </button>
+              <button
+                onClick={() => setViewingCompletedOrder(null)}
+                className="px-6 py-3 bg-slate-100 text-slate-700 rounded-xl font-bold text-sm hover:bg-slate-200 transition-colors"
+              >
+                Закрыть
+              </button>
             </div>
           </div>
         </div>

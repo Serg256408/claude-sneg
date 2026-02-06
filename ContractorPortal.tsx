@@ -1,5 +1,5 @@
 ﻿import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Order, OrderStatus, AssetType, Contractor, Bid, DriverAssignment, Message, formatPrice, formatDateTime, generateId, PriceUnit, TripEvidence, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateAssignmentEarnings, isLoaderType, getShiftHours, toLocalDateTimeInputValue } from './types';
+import { Order, OrderStatus, AssetType, Contractor, Bid, DriverAssignment, Message, formatPrice, formatDateTime, generateId, PriceUnit, TripEvidence, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateAssignmentEarnings, isLoaderType, getShiftHours, toLocalDateTimeInputValue, Vehicle } from './types';
 import DriverPortal from './DriverPortal';
 import ConfirmModal from './ConfirmModal';
 
@@ -7,6 +7,7 @@ interface ContractorPortalProps {
   orders: Order[];
   contractors: Contractor[];
   currentContractorId: string;
+  vehicles?: Vehicle[];
   onSubmitBid: (orderId: string, bid: Bid) => void;
   onWithdrawBid: (orderId: string, bidId: string) => void;
   onUpdateContractor: (contractor: Contractor) => void;
@@ -23,6 +24,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
   orders,
   contractors,
   currentContractorId,
+  vehicles = [],
   onSubmitBid,
   onWithdrawBid,
   onUpdateContractor,
@@ -47,6 +49,13 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
   const [preBidPrices, setPreBidPrices] = useState<Record<string, string>>({});
   const [counterOfferPrices, setCounterOfferPrices] = useState<Record<string, string>>({});
   const [showBidModal, setShowBidModal] = useState(false);
+  const [vehicleInputMode, setVehicleInputMode] = useState<'select' | 'manual'>('select');
+  const [selectedVehicleId, setSelectedVehicleId] = useState<string>('');
+
+  // Автомобили текущего подрядчика
+  const contractorVehicles = useMemo(() => {
+    return vehicles.filter(v => v.ownerCompanyId === currentContractorId || v.ownerType === 'contractor');
+  }, [vehicles, currentContractorId]);
   const [chatModal, setChatModal] = useState<{ isOpen: boolean; order: Order | null; message: string }>({
     isOpen: false,
     order: null,
@@ -256,7 +265,8 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
   }, [chatModal, currentContractor, currentContractorId, onUpdateOrder]);
 
   const visibleMyBids = useMemo(() => {
-    return filteredMyBids.filter(entry => ['pending', 'rejected'].includes(entry.bid.status));
+    // Показываем только отклики на рассмотрении (pending)
+    return filteredMyBids.filter(entry => entry.bid.status === 'pending');
   }, [filteredMyBids]);
 
   const latestBidByOrderAndType = useMemo(() => {
@@ -629,38 +639,72 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
         {/* === БИРЖА === */}
         {activeTab === 'available' && (
           <div className="space-y-4 animate-in fade-in">
-            {/* Мои отклики */}
-            {visibleMyBids.length > 0 && (
-              <div className="bg-blue-600/10 border border-blue-500/30 rounded-2xl p-4 mb-4">
-                <h4 className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-                  <span className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></span>
-                  Ваши отклики ({visibleMyBids.length})
-                </h4>
-                <div className="space-y-2">
-                  {visibleMyBids.map(({ order, bid }) => {
+            {/* Мои отклики - сгруппированные по заказам */}
+            {visibleMyBids.length > 0 && (() => {
+              // Группируем отклики по заказам
+              const bidsByOrder = new Map<string, { order: Order; bids: Bid[] }>();
+              visibleMyBids.forEach(({ order, bid }) => {
+                const existing = bidsByOrder.get(order.id);
+                if (existing) {
+                  existing.bids.push(bid);
+                } else {
+                  bidsByOrder.set(order.id, { order, bids: [bid] });
+                }
+              });
+
+              return (
+                <div className="space-y-3 mb-4">
+                  {Array.from(bidsByOrder.values()).map(({ order, bids }) => {
                     const normalizedStatus = normalizeOrderStatus(order.status);
                     const canWithdraw = normalizedStatus !== OrderStatus.COMPLETED && normalizedStatus !== OrderStatus.CANCELLED;
 
                     return (
-                      <div key={bid.id} className="flex items-center justify-between bg-white/5 p-3 rounded-xl">
-                        <div>
-                          <div className="text-sm font-black">{order.address}</div>
-                          <div className="text-[9px] text-slate-500">{formatPrice(bid.proposedPrice)} • {bid.assetType}</div>
+                      <div key={order.id} className="bg-blue-600/10 border border-blue-500/30 rounded-2xl p-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <h4 className="text-[10px] font-black text-blue-400 uppercase tracking-widest flex items-center gap-2">
+                            <span className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></span>
+                            Ваши отклики по заказу
+                          </h4>
+                          <span className="text-[9px] text-slate-400">{formatDateTime(order.scheduledTime)}</span>
                         </div>
-                        {canWithdraw && (
-                          <button 
-                            onClick={() => handleWithdrawBid(order.id, bid.id)}
-                            className="text-[9px] text-red-400 font-black uppercase hover:text-red-300"
-                          >
-                            Отозвать
-                          </button>
-                        )}
+
+                        {/* Адрес заказа */}
+                        <div className="bg-white/5 rounded-xl p-3 mb-3">
+                          <div className="text-[9px] text-slate-500 uppercase mb-1">{order.customer}</div>
+                          <div className="text-sm font-black">{order.address}</div>
+                        </div>
+
+                        {/* Отклики по этому заказу */}
+                        <div className="space-y-2">
+                          {bids.map(bid => (
+                            <div key={bid.id} className="flex items-center justify-between bg-white/10 p-3 rounded-xl">
+                              <div className="flex items-center gap-3">
+                                <span className="text-xl">{bid.assetType === AssetType.LOADER || bid.assetType === AssetType.MINI_LOADER ? '🚜' : '🚛'}</span>
+                                <div>
+                                  <div className="text-sm font-black">{getAssetTypeLabel(bid.assetType)}</div>
+                                  <div className="text-[9px] text-slate-400">
+                                    {formatPrice(bid.proposedPrice)} / {isLoaderType(bid.assetType) ? 'смена' : 'рейс'}
+                                    <span className="ml-2 text-yellow-400">• На рассмотрении</span>
+                                  </div>
+                                </div>
+                              </div>
+                              {canWithdraw && bid.status === 'pending' && (
+                                <button
+                                  onClick={() => handleWithdrawBid(order.id, bid.id)}
+                                  className="px-3 py-2 rounded-lg text-[9px] text-red-400 font-black uppercase hover:bg-red-500/20 transition-colors"
+                                >
+                                  Отозвать
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Доступные заказы */}
             {filteredAvailableOrders.length === 0 ? (
@@ -699,7 +743,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                       <div className="space-y-2">
                         {birzhaRequirements.map((req, i) => {
                           const assignedCount = (order.driverDetails || []).filter(d => d.assetType === req.type).length;
-                          const remaining = Math.max(0, req.plannedUnits - assignedCount);
+                          const remaining = Math.max(0, (req.plannedUnits || 1) - assignedCount);
                           const bidKey = `${order.id}::${req.type}`;
                           const myBidForType = latestBidByOrderAndType.get(bidKey);
                           const hasMyBidForType = Boolean(myBidForType);
@@ -767,13 +811,14 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                                     <div className="px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest bg-blue-600/20 text-blue-300 border border-blue-500/30">
                                       ✓ {bidStatusLabel}
                                     </div>
-                                    {myBidForType?.bid.status === 'rejected' && (
+                                    {/* Возможность откликнуться снова - всегда если отклик не принят */}
+                                    {myBidForType?.bid.status !== 'accepted' && (
                                       <div className="flex items-center gap-2">
                                         <input
                                           type="number"
                                           min={0}
                                           step={100}
-                                          placeholder="Цена меньше"
+                                          placeholder="Новая цена"
                                           value={counterOfferPrices[bidKey] || ''}
                                           onChange={e =>
                                             setCounterOfferPrices(prev => ({ ...prev, [bidKey]: e.target.value }))
@@ -787,7 +832,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                                           }
                                           className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded-xl text-[9px] font-black uppercase"
                                         >
-                                          Предложить меньше
+                                          Откликнуться снова
                                         </button>
                                       </div>
                                     )}
@@ -834,8 +879,8 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 
                       <div className="space-y-2">
                         {directRequirements.map((req, i) => {
-                          const assigned = (order.driverDetails || []).filter(d => d.assetType === req.type).length;
-                          const remaining = (req.plannedUnits || 0) - assigned;
+                          const assigned = (order.driverDetails || []).filter(d => d.assetType === req.type && d.contractorId === currentContractorId).length;
+                          const remaining = (req.plannedUnits || 1) - assigned;
                           if (remaining <= 0) return null;
                           const bidKey = `${order.id}::${req.type}`;
                           const myBidForType = latestBidByOrderAndType.get(bidKey);
@@ -896,13 +941,14 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                                     <div className="px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest bg-blue-600/20 text-blue-300 border border-blue-500/30">
                                       ✓ {bidStatusLabel}
                                     </div>
-                                    {myBidForType?.bid.status === 'rejected' && (
+                                    {/* Возможность откликнуться снова - всегда если отклик не принят */}
+                                    {myBidForType?.bid.status !== 'accepted' && (
                                       <div className="flex items-center gap-2">
                                         <input
                                           type="number"
                                           min={0}
                                           step={100}
-                                          placeholder="Цена меньше"
+                                          placeholder="Новая цена"
                                           value={counterOfferPrices[bidKey] || ''}
                                           onChange={e =>
                                             setCounterOfferPrices(prev => ({ ...prev, [bidKey]: e.target.value }))
@@ -916,7 +962,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                                           }
                                           className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded-xl text-[9px] font-black uppercase"
                                         >
-                                          Предложить меньше
+                                          Откликнуться снова
                                         </button>
                                       </div>
                                     )}
@@ -1393,6 +1439,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
               onAcceptJob={onAcceptJob}
               onFinishWork={onFinishWork}
               onUpdateDriverAssignment={onUpdateDriverAssignment}
+              onUpdateOrder={onUpdateOrder}
               embedded
               hideCompletedAssignments
             />
@@ -1485,13 +1532,93 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 
               <div>
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Информация о технике</label>
-                <input
-                  type="text"
-                  className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-3 text-sm outline-none focus:border-blue-500"
-                  placeholder="Марка, гос.номер"
-                  value={bidForm.vehicleInfo}
-                  onChange={e => setBidForm({ ...bidForm, vehicleInfo: e.target.value })}
-                />
+
+                {/* Переключатель режима */}
+                <div className="flex gap-2 mb-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVehicleInputMode('select');
+                      setSelectedVehicleId('');
+                      setBidForm({ ...bidForm, vehicleInfo: '' });
+                    }}
+                    className={`flex-1 py-2 rounded-lg text-[10px] font-bold uppercase transition-colors ${
+                      vehicleInputMode === 'select'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-white/10 text-slate-400 hover:bg-white/20'
+                    }`}
+                  >
+                    Выбрать из списка
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVehicleInputMode('manual');
+                      setSelectedVehicleId('');
+                      setBidForm({ ...bidForm, vehicleInfo: '' });
+                    }}
+                    className={`flex-1 py-2 rounded-lg text-[10px] font-bold uppercase transition-colors ${
+                      vehicleInputMode === 'manual'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-white/10 text-slate-400 hover:bg-white/20'
+                    }`}
+                  >
+                    Ввести вручную
+                  </button>
+                </div>
+
+                {vehicleInputMode === 'select' ? (
+                  <div className="space-y-2">
+                    {contractorVehicles.length > 0 ? (
+                      <select
+                        className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-3 text-sm outline-none focus:border-blue-500 text-white"
+                        value={selectedVehicleId}
+                        onChange={e => {
+                          const vehicleId = e.target.value;
+                          setSelectedVehicleId(vehicleId);
+                          const vehicle = contractorVehicles.find(v => v.id === vehicleId);
+                          if (vehicle) {
+                            const info = `${vehicle.brand || vehicle.type} ${vehicle.plateNumber}`;
+                            setBidForm({ ...bidForm, vehicleInfo: info });
+                          } else {
+                            setBidForm({ ...bidForm, vehicleInfo: '' });
+                          }
+                        }}
+                      >
+                        <option value="">— Выберите автомобиль —</option>
+                        {contractorVehicles.map(v => (
+                          <option key={v.id} value={v.id}>
+                            {v.brand || v.type} • {v.plateNumber} {v.capacityM3 ? `• ${v.capacityM3}м³` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div className="text-center py-4 text-slate-500 text-sm">
+                        <div className="mb-2">Нет сохранённых автомобилей</div>
+                        <button
+                          type="button"
+                          onClick={() => setVehicleInputMode('manual')}
+                          className="text-blue-400 underline text-xs"
+                        >
+                          Ввести вручную
+                        </button>
+                      </div>
+                    )}
+                    {selectedVehicleId && (
+                      <div className="text-xs text-green-400 mt-1">
+                        Выбрано: {bidForm.vehicleInfo}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-3 text-sm outline-none focus:border-blue-500"
+                    placeholder="Марка, гос.номер (например: КАМАЗ А123АА77)"
+                    value={bidForm.vehicleInfo}
+                    onChange={e => setBidForm({ ...bidForm, vehicleInfo: e.target.value })}
+                  />
+                )}
               </div>
 
               <div>

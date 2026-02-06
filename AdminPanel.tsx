@@ -7,13 +7,18 @@ import {
   PriceBookItem,
   ServiceType,
   CommissionSettings,
+  CompanySettings,
   Vehicle,
   AssetType,
   generateId,
   formatPrice,
+  formatDateTime,
   USER_ROLE_LABELS,
   SERVICE_TYPE_LABELS,
   MOSCOW_DISTRICTS,
+  ActivityLogEntry,
+  ACTIVITY_ACTION_LABELS,
+  ACTIVITY_ENTITY_LABELS,
 } from './types';
 
 interface AdminPanelProps {
@@ -21,6 +26,7 @@ interface AdminPanelProps {
   companies: Company[];
   priceBook: PriceBookItem[];
   commissionSettings: CommissionSettings | null;
+  companySettings: CompanySettings | null;
   vehicles: Vehicle[];
   onAddUser: (user: User) => void;
   onUpdateUser: (userId: string, updates: Partial<User>) => void;
@@ -30,8 +36,13 @@ interface AdminPanelProps {
   onUpdatePriceItem: (itemId: string, updates: Partial<PriceBookItem>) => void;
   onDeletePriceItem: (itemId: string) => void;
   onUpdateCommissionSettings: (settings: CommissionSettings) => void;
+  onUpdateCompanySettings: (settings: CompanySettings) => void;
   onAddVehicle: (vehicle: Vehicle) => void;
   onUpdateVehicle: (vehicleId: string, updates: Partial<Vehicle>) => void;
+  // Журнал действий
+  activityLog: ActivityLogEntry[];
+  onRevertActivity: (entry: ActivityLogEntry) => void;
+  onClearActivityLog: () => void;
 }
 
 // Дефолтные настройки комиссий
@@ -48,11 +59,32 @@ const DEFAULT_COMMISSION: CommissionSettings = {
   createdAt: new Date().toISOString(),
 };
 
+// Дефолтные настройки компании (реквизиты Транском)
+const DEFAULT_COMPANY_SETTINGS: CompanySettings = {
+  id: 'transkom',
+  name: 'Транском',
+  fullName: 'ООО "Транском"',
+  legalAddress: 'Московская область, г. Балашиха',
+  inn: '5001098904',
+  kpp: '500101001',
+  ogrn: '1145001001530',
+  bankName: 'Московский филиал ПАО «Промсвязьбанк»',
+  bankAccount: '40702810900000035482',
+  corrAccount: '30101810400000000555',
+  bik: '044525555',
+  directorName: 'Терехов Сергей Юрьевич',
+  directorPosition: 'Генеральный директор',
+  phone: '8-915-019-59-41',
+  email: 'Spezavtoteh@gmail.com',
+  createdAt: new Date().toISOString(),
+};
+
 export default function AdminPanel({
   users,
   companies,
   priceBook,
   commissionSettings,
+  companySettings,
   vehicles,
   onAddUser,
   onUpdateUser,
@@ -62,10 +94,14 @@ export default function AdminPanel({
   onUpdatePriceItem,
   onDeletePriceItem,
   onUpdateCommissionSettings,
+  onUpdateCompanySettings,
   onAddVehicle,
   onUpdateVehicle,
+  activityLog,
+  onRevertActivity,
+  onClearActivityLog,
 }: AdminPanelProps) {
-  const [activeTab, setActiveTab] = useState<'users' | 'companies' | 'prices' | 'commissions' | 'vehicles'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'companies' | 'prices' | 'commissions' | 'vehicles' | 'requisites' | 'activity_log'>('users');
   const [showUserForm, setShowUserForm] = useState(false);
   const [showCompanyForm, setShowCompanyForm] = useState(false);
   const [showPriceForm, setShowPriceForm] = useState(false);
@@ -252,6 +288,17 @@ export default function AdminPanel({
     onUpdateCommissionSettings(editingSettings);
   };
 
+  // Редактирование реквизитов компании
+  const companyData = companySettings || DEFAULT_COMPANY_SETTINGS;
+  const [editingCompanySettings, setEditingCompanySettings] = useState<CompanySettings>(companyData);
+
+  const handleSaveCompanySettings = () => {
+    onUpdateCompanySettings({
+      ...editingCompanySettings,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -309,6 +356,23 @@ export default function AdminPanel({
           onClick={() => setActiveTab('commissions')}
         >
           Комиссии
+        </button>
+        <button
+          className={`px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap ${activeTab === 'requisites' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200'}`}
+          onClick={() => setActiveTab('requisites')}
+        >
+          Реквизиты компании
+        </button>
+        <button
+          className={`px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap relative ${activeTab === 'activity_log' ? 'bg-amber-500 text-white' : 'bg-amber-50 border border-amber-200 text-amber-700'}`}
+          onClick={() => setActiveTab('activity_log')}
+        >
+          Журнал действий
+          {activityLog.length > 0 && (
+            <span className="ml-2 px-1.5 py-0.5 rounded-full text-[10px] font-black bg-amber-600 text-white">
+              {activityLog.length > 99 ? '99+' : activityLog.length}
+            </span>
+          )}
         </button>
       </div>
 
@@ -653,6 +717,238 @@ export default function AdminPanel({
         </div>
       )}
 
+      {/* Реквизиты компании */}
+      {activeTab === 'requisites' && (
+        <div className="bg-white rounded-[2rem] border border-slate-200 p-6">
+          <h2 className="text-xl font-black mb-6">Реквизиты компании</h2>
+          <p className="text-slate-500 text-sm mb-6">
+            Эти данные будут использоваться во всех документах: счетах, договорах, актах, реестрах.
+          </p>
+          <div className="space-y-6 max-w-2xl">
+            {/* Основные данные */}
+            <div className="border-b border-slate-100 pb-6">
+              <h3 className="font-bold mb-4 text-slate-700">Основные данные</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Краткое название *</label>
+                  <input
+                    type="text"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                    value={editingCompanySettings.name || ''}
+                    onChange={e => setEditingCompanySettings({ ...editingCompanySettings, name: e.target.value })}
+                    placeholder="Транском"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Полное наименование *</label>
+                  <input
+                    type="text"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                    value={editingCompanySettings.fullName || ''}
+                    onChange={e => setEditingCompanySettings({ ...editingCompanySettings, fullName: e.target.value })}
+                    placeholder='ООО "Транском"'
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Регистрационные данные */}
+            <div className="border-b border-slate-100 pb-6">
+              <h3 className="font-bold mb-4 text-slate-700">Регистрационные данные</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">ИНН *</label>
+                  <input
+                    type="text"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                    value={editingCompanySettings.inn || ''}
+                    onChange={e => setEditingCompanySettings({ ...editingCompanySettings, inn: e.target.value })}
+                    placeholder="1234567890"
+                    maxLength={12}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">КПП *</label>
+                  <input
+                    type="text"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                    value={editingCompanySettings.kpp || ''}
+                    onChange={e => setEditingCompanySettings({ ...editingCompanySettings, kpp: e.target.value })}
+                    placeholder="123456789"
+                    maxLength={9}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">ОГРН *</label>
+                  <input
+                    type="text"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                    value={editingCompanySettings.ogrn || ''}
+                    onChange={e => setEditingCompanySettings({ ...editingCompanySettings, ogrn: e.target.value })}
+                    placeholder="1234567890123"
+                    maxLength={15}
+                  />
+                </div>
+              </div>
+              <div className="mt-4">
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Юридический адрес *</label>
+                <input
+                  type="text"
+                  className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                  value={editingCompanySettings.legalAddress || ''}
+                  onChange={e => setEditingCompanySettings({ ...editingCompanySettings, legalAddress: e.target.value })}
+                  placeholder="Московская область, г. Балашиха..."
+                />
+              </div>
+              <div className="mt-4">
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Фактический адрес</label>
+                <input
+                  type="text"
+                  className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                  value={editingCompanySettings.actualAddress || ''}
+                  onChange={e => setEditingCompanySettings({ ...editingCompanySettings, actualAddress: e.target.value })}
+                  placeholder="Если отличается от юридического"
+                />
+              </div>
+            </div>
+
+            {/* Банковские реквизиты */}
+            <div className="border-b border-slate-100 pb-6">
+              <h3 className="font-bold mb-4 text-slate-700">Банковские реквизиты</h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Наименование банка *</label>
+                  <input
+                    type="text"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                    value={editingCompanySettings.bankName || ''}
+                    onChange={e => setEditingCompanySettings({ ...editingCompanySettings, bankName: e.target.value })}
+                    placeholder='Московский филиал ПАО «Промсвязьбанк»'
+                  />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Расчётный счёт *</label>
+                    <input
+                      type="text"
+                      className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                      value={editingCompanySettings.bankAccount || ''}
+                      onChange={e => setEditingCompanySettings({ ...editingCompanySettings, bankAccount: e.target.value })}
+                      placeholder="40702810900000035482"
+                      maxLength={20}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Корр. счёт *</label>
+                    <input
+                      type="text"
+                      className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                      value={editingCompanySettings.corrAccount || ''}
+                      onChange={e => setEditingCompanySettings({ ...editingCompanySettings, corrAccount: e.target.value })}
+                      placeholder="30101810400000000555"
+                      maxLength={20}
+                    />
+                  </div>
+                </div>
+                <div className="max-w-[200px]">
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">БИК *</label>
+                  <input
+                    type="text"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                    value={editingCompanySettings.bik || ''}
+                    onChange={e => setEditingCompanySettings({ ...editingCompanySettings, bik: e.target.value })}
+                    placeholder="044525555"
+                    maxLength={9}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Руководитель и контакты */}
+            <div className="border-b border-slate-100 pb-6">
+              <h3 className="font-bold mb-4 text-slate-700">Руководитель и контакты</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">ФИО руководителя *</label>
+                  <input
+                    type="text"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                    value={editingCompanySettings.directorName || ''}
+                    onChange={e => setEditingCompanySettings({ ...editingCompanySettings, directorName: e.target.value })}
+                    placeholder="Терехов Сергей Юрьевич"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Должность</label>
+                  <input
+                    type="text"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                    value={editingCompanySettings.directorPosition || ''}
+                    onChange={e => setEditingCompanySettings({ ...editingCompanySettings, directorPosition: e.target.value })}
+                    placeholder="Генеральный директор"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Телефон *</label>
+                  <input
+                    type="tel"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                    value={editingCompanySettings.phone || ''}
+                    onChange={e => setEditingCompanySettings({ ...editingCompanySettings, phone: e.target.value })}
+                    placeholder="+7 (915) 019-59-41"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Email *</label>
+                  <input
+                    type="email"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                    value={editingCompanySettings.email || ''}
+                    onChange={e => setEditingCompanySettings({ ...editingCompanySettings, email: e.target.value })}
+                    placeholder="Spezavtoteh@gmail.com"
+                  />
+                </div>
+              </div>
+              <div className="mt-4">
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Сайт</label>
+                <input
+                  type="url"
+                  className="w-full rounded-xl border border-slate-200 px-4 py-2"
+                  value={editingCompanySettings.website || ''}
+                  onChange={e => setEditingCompanySettings({ ...editingCompanySettings, website: e.target.value })}
+                  placeholder="https://transkom.ru"
+                />
+              </div>
+            </div>
+
+            {/* Кнопки */}
+            <div className="flex gap-4">
+              <button
+                className="px-6 py-3 bg-slate-900 text-white rounded-xl font-bold"
+                onClick={handleSaveCompanySettings}
+              >
+                Сохранить реквизиты
+              </button>
+              <button
+                className="px-6 py-3 border border-slate-200 rounded-xl font-bold text-slate-600"
+                onClick={() => setEditingCompanySettings(companyData)}
+              >
+                Сбросить изменения
+              </button>
+            </div>
+
+            {/* Информация о последнем обновлении */}
+            {editingCompanySettings.updatedAt && (
+              <p className="text-xs text-slate-400 mt-4">
+                Последнее обновление: {new Date(editingCompanySettings.updatedAt).toLocaleString('ru')}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Модалка пользователя */}
       {showUserForm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setShowUserForm(false)}>
@@ -971,6 +1267,157 @@ export default function AdminPanel({
                   Отмена
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Журнал действий */}
+      {activeTab === 'activity_log' && (
+        <div className="bg-white rounded-[2rem] border border-slate-200 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-xl font-black">Журнал действий</h2>
+              <p className="text-sm text-slate-500 mt-1">
+                История всех изменений с возможностью отката
+              </p>
+            </div>
+            <button
+              className="px-4 py-2 rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm font-bold hover:bg-red-100"
+              onClick={() => {
+                if (window.confirm('Очистить весь журнал действий?')) {
+                  onClearActivityLog();
+                }
+              }}
+            >
+              Очистить журнал
+            </button>
+          </div>
+
+          {activityLog.length === 0 ? (
+            <div className="text-center py-12">
+              <div className="text-5xl mb-4">📋</div>
+              <div className="text-lg font-bold text-slate-400">Журнал пуст</div>
+              <div className="text-sm text-slate-400 mt-1">
+                Действия будут записываться автоматически
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3 max-h-[600px] overflow-y-auto">
+              {activityLog.map(log => (
+                <div
+                  key={log.id}
+                  className={`rounded-2xl border p-4 transition-all ${
+                    log.isReverted
+                      ? 'bg-slate-50 border-slate-200 opacity-60'
+                      : 'bg-white border-slate-200 hover:border-slate-300 hover:shadow-md'
+                  }`}
+                >
+                  <div className="flex items-start gap-4">
+                    {/* Иконка типа */}
+                    <div className="text-2xl flex-shrink-0">
+                      {log.entityType === 'order' && '📦'}
+                      {log.entityType === 'customer' && '👤'}
+                      {log.entityType === 'contractor' && '🚛'}
+                      {log.entityType === 'lead' && '📋'}
+                      {log.entityType === 'invoice' && '📄'}
+                      {log.entityType === 'payment' && '💳'}
+                      {!['order', 'customer', 'contractor', 'lead', 'invoice', 'payment'].includes(log.entityType) && '📝'}
+                    </div>
+
+                    {/* Основной контент */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                            log.isReverted ? 'bg-slate-100 text-slate-400' :
+                            log.action === 'create' ? 'bg-emerald-100 text-emerald-700' :
+                            log.action === 'update' ? 'bg-blue-100 text-blue-700' :
+                            log.action === 'delete' ? 'bg-red-100 text-red-700' :
+                            log.action === 'status_change' ? 'bg-violet-100 text-violet-700' :
+                            'bg-slate-100 text-slate-700'
+                          }`}
+                        >
+                          {ACTIVITY_ACTION_LABELS[log.action] || log.action}
+                        </span>
+                        <span className="text-xs text-slate-400">
+                          {ACTIVITY_ENTITY_LABELS[log.entityType] || log.entityType}
+                        </span>
+                        {log.isReverted && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-orange-100 text-orange-700">
+                            Откачено
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="mt-1 font-bold text-slate-900 truncate">
+                        {log.entityName}
+                      </div>
+
+                      <div className="mt-1 text-sm text-slate-600">
+                        {log.description}
+                      </div>
+
+                      <div className="mt-2 flex items-center gap-3 text-xs text-slate-400">
+                        <span>👤 {log.userName}</span>
+                        <span>📅 {formatDateTime(log.timestamp)}</span>
+                        {log.isReverted && log.revertedAt && (
+                          <span>↩️ Откачено: {formatDateTime(log.revertedAt)}</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Кнопка отката */}
+                    <div className="flex-shrink-0">
+                      {log.isReversible && !log.isReverted ? (
+                        <button
+                          onClick={() => {
+                            if (window.confirm(`Откатить действие "${log.description}"?`)) {
+                              onRevertActivity(log);
+                            }
+                          }}
+                          className="px-4 py-2 rounded-xl bg-amber-500 text-white text-sm font-bold hover:bg-amber-600 transition-colors"
+                        >
+                          ↩️ Откатить
+                        </button>
+                      ) : log.isReverted ? (
+                        <span className="text-xs text-slate-400 italic">Откачено</span>
+                      ) : (
+                        <span className="text-xs text-slate-400 italic">Нельзя откатить</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Детали для разработчиков */}
+                  <details className="mt-3">
+                    <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600">
+                      Показать детали (JSON)
+                    </summary>
+                    <div className="mt-2 p-3 bg-slate-100 rounded-xl text-xs font-mono overflow-x-auto">
+                      <div className="mb-2">
+                        <strong>Было:</strong>
+                        <pre className="whitespace-pre-wrap break-all">
+                          {JSON.stringify(log.prevState, null, 2)?.slice(0, 500) || 'null'}
+                          {JSON.stringify(log.prevState)?.length > 500 ? '...' : ''}
+                        </pre>
+                      </div>
+                      <div>
+                        <strong>Стало:</strong>
+                        <pre className="whitespace-pre-wrap break-all">
+                          {JSON.stringify(log.newState, null, 2)?.slice(0, 500) || 'null'}
+                          {JSON.stringify(log.newState)?.length > 500 ? '...' : ''}
+                        </pre>
+                      </div>
+                    </div>
+                  </details>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-4 pt-4 border-t border-slate-100 text-center">
+            <div className="text-xs text-slate-400">
+              Хранится последние 500 записей. Откат возможен для создания, изменения и удаления.
             </div>
           </div>
         </div>

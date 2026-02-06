@@ -1287,6 +1287,40 @@ export interface ManagerBonus {
 }
 
 // ============================================
+// НАСТРОЙКИ КОМПАНИИ
+// ============================================
+export interface CompanySettings {
+  id: string;
+  // Основные реквизиты
+  name: string;                    // Наименование компании
+  fullName?: string;               // Полное наименование (ООО "...")
+  legalAddress: string;            // Юридический адрес
+  actualAddress?: string;          // Фактический адрес
+  // Регистрационные данные
+  inn: string;                     // ИНН
+  kpp: string;                     // КПП
+  ogrn: string;                    // ОГРН
+  // Банковские реквизиты
+  bankName: string;                // Наименование банка
+  bankAccount: string;             // Расчётный счёт
+  corrAccount: string;             // Корреспондентский счёт
+  bik: string;                     // БИК
+  // Контактные данные
+  directorName: string;            // Генеральный директор
+  directorPosition?: string;       // Должность руководителя
+  phone: string;                   // Телефон
+  email: string;                   // Email
+  website?: string;                // Сайт
+  // Дополнительно
+  logoUrl?: string;                // Логотип компании
+  stampUrl?: string;               // Печать компании
+  signatureUrl?: string;           // Подпись директора
+  // Мета
+  createdAt: string;
+  updatedAt?: string;
+}
+
+// ============================================
 // НАСТРОЙКИ КОМИССИЙ
 // ============================================
 export interface CommissionSettings {
@@ -2035,3 +2069,71 @@ export const LEAD_SOURCES = [
   { value: 'referral', label: 'Рекомендация' },
   { value: 'other', label: 'Другое' }
 ];
+
+// ============================================
+// ЖУРНАЛ ДЕЙСТВИЙ (Activity Log)
+// ============================================
+export type ActivityLogEntityType =
+  | 'order'
+  | 'customer'
+  | 'contractor'
+  | 'lead'
+  | 'user'
+  | 'invoice'
+  | 'payment';
+
+export type ActivityLogAction =
+  | 'create'
+  | 'update'
+  | 'delete'
+  | 'status_change'
+  | 'assignment'
+  | 'message'
+  | 'payment'
+  | 'bid';
+
+export interface ActivityLogEntry {
+  id: string;
+  timestamp: string;
+  // Кто совершил действие
+  userId?: string;
+  userName: string;
+  userRole: string;
+  // Что изменено
+  entityType: ActivityLogEntityType;
+  entityId: string;
+  entityName: string;
+  // Действие
+  action: ActivityLogAction;
+  actionLabel: string;
+  description: string;
+  // Для отката
+  prevState: unknown;
+  newState: unknown;
+  // Можно откатить?
+  isReversible: boolean;
+  isReverted: boolean;
+  revertedAt?: string;
+  revertedBy?: string;
+}
+
+export const ACTIVITY_ACTION_LABELS: Record<ActivityLogAction, string> = {
+  create: 'Создание',
+  update: 'Изменение',
+  delete: 'Удаление',
+  status_change: 'Смена статуса',
+  assignment: 'Назначение',
+  message: 'Сообщение',
+  payment: 'Оплата',
+  bid: 'Заявка'
+};
+
+export const ACTIVITY_ENTITY_LABELS: Record<ActivityLogEntityType, string> = {
+  order: 'Заказ',
+  customer: 'Клиент',
+  contractor: 'Подрядчик',
+  lead: 'Лид',
+  user: 'Пользователь',
+  invoice: 'Счёт',
+  payment: 'Платёж'
+};

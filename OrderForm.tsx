@@ -78,16 +78,18 @@ const OrderForm: React.FC<OrderFormProps> = ({
     onConfirm: () => {}
   });
 
-  // Состояние модалки сообщений подрядчику
+  // Состояние модалки сообщений (подрядчику или клиенту)
   const [messageModal, setMessageModal] = useState<{
     isOpen: boolean;
-    contractorId: string;
-    contractorName: string;
+    mode: 'contractor' | 'driver' | 'customer';
+    targetId: string;
+    targetName: string;
     message: string;
   }>({
     isOpen: false,
-    contractorId: '',
-    contractorName: '',
+    mode: 'contractor',
+    targetId: '',
+    targetName: '',
     message: ''
   });
   const dispatcherChatRef = useRef<HTMLDivElement>(null);
@@ -108,17 +110,25 @@ const OrderForm: React.FC<OrderFormProps> = ({
 
   const [shiftEdits, setShiftEdits] = useState<Record<string, { start: string; end: string; price: string }>>({});
 
-  // Отправка сообщения подрядчику
-  const sendMessageToContractor = useCallback(() => {
-    if (!messageModal.message.trim() || !messageModal.contractorId) return;
+  // Отправка сообщения (подрядчику, водителю или клиенту)
+  const sendMessage = useCallback(() => {
+    if (!messageModal.message.trim() || !messageModal.targetId) return;
+
+    const getToRole = () => {
+      switch (messageModal.mode) {
+        case 'driver': return 'driver';
+        case 'customer': return 'customer';
+        default: return 'contractor';
+      }
+    };
 
     const newMessage: Message = {
       id: generateId(),
       orderId: formData.id || '',
       fromRole: 'dispatcher',
       fromName: currentUser,
-      toRole: 'contractor',
-      toId: messageModal.contractorId,
+      toRole: getToRole(),
+      toId: messageModal.targetId,
       text: messageModal.message.trim(),
       timestamp: new Date().toISOString(),
       isRead: false
@@ -199,40 +209,45 @@ const OrderForm: React.FC<OrderFormProps> = ({
       alert('Укажите время начала и окончания смены.');
       return;
     }
-    const parsedPrice = Number(edit.price.replace(',', '.'));
-    const priceValue = Number.isFinite(parsedPrice) && parsedPrice > 0 ? parsedPrice : driver.assignedPrice;
+    const parsedPrice = Number((edit.price || '0').replace(',', '.'));
+    const priceValue = Number.isFinite(parsedPrice) && parsedPrice > 0 ? parsedPrice : (driver.assignedPrice || 0);
 
-    setFormData(prev => {
-      const updatedDrivers = (prev.driverDetails || []).map(d =>
-        d.id === driver.id
-          ? {
-              ...d,
-              shiftStartTime: normalizedStart,
-              shiftEndTime: normalizedEnd,
-              assignedPrice: priceValue,
-              shiftApprovedBy: currentUser,
-              shiftApprovedAt: new Date().toISOString()
-            }
-          : d
-      );
-      const logEntry: ActionLog = {
-        id: generateId(),
-        orderId: prev.id || '',
-        timestamp: new Date().toISOString(),
-        action: `Смена подтверждена диспетчером (${driver.driverName})`,
-        actionType: 'assignment',
-        performedBy: currentUser,
-        performedByRole: 'manager'
-      };
-      const updated = {
-        ...prev,
-        driverDetails: updatedDrivers,
-        actionLog: [...(prev.actionLog || []), logEntry]
-      };
-      onSubmit(updated, true);
-      return updated;
-    });
-  }, [currentUser, getShiftEdit, onSubmit]);
+    // Сначала вычисляем обновлённые данные
+    const updatedDrivers = (formData.driverDetails || []).map(d =>
+      d.id === driver.id
+        ? {
+            ...d,
+            shiftStartTime: normalizedStart,
+            shiftEndTime: normalizedEnd,
+            assignedPrice: priceValue,
+            shiftApprovedBy: currentUser,
+            shiftApprovedAt: new Date().toISOString()
+          }
+        : d
+    );
+
+    const logEntry: ActionLog = {
+      id: generateId(),
+      orderId: formData.id || '',
+      timestamp: new Date().toISOString(),
+      action: `Смена подтверждена диспетчером (${driver.driverName})`,
+      actionType: 'assignment',
+      performedBy: currentUser,
+      performedByRole: 'manager'
+    };
+
+    const updatedFormData = {
+      ...formData,
+      driverDetails: updatedDrivers,
+      actionLog: [...(formData.actionLog || []), logEntry]
+    };
+
+    // Обновляем состояние
+    setFormData(updatedFormData);
+
+    // Вызываем onSubmit с обновлёнными данными
+    onSubmit(updatedFormData, true);
+  }, [currentUser, getShiftEdit, onSubmit, formData]);
 
   // Вычисляемые значения
   const hasDirectOffers = useMemo(() => formData.assetRequirements?.some(r => r.contractorId), [formData.assetRequirements]);
@@ -657,7 +672,6 @@ const OrderForm: React.FC<OrderFormProps> = ({
 
   const statusActions = [
     { from: [OrderStatus.AWAITING_CUSTOMER], to: OrderStatus.SEARCHING_EQUIPMENT, label: 'Клиент согласовал' },
-    { from: [OrderStatus.SEARCHING_EQUIPMENT], to: OrderStatus.EQUIPMENT_APPROVED, label: 'Техника назначена' },
     { from: [OrderStatus.EQUIPMENT_APPROVED], to: OrderStatus.EN_ROUTE, label: 'В пути' },
     { from: [OrderStatus.EN_ROUTE], to: OrderStatus.IN_PROGRESS, label: 'В работе' },
   ];
@@ -888,7 +902,60 @@ const OrderForm: React.FC<OrderFormProps> = ({
               {/* Заказчик и адрес */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5 relative" ref={dropdownRef}>
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Заказчик</label>
+                  <div className="flex items-center justify-between mb-3">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Заказчик</label>
+                    {formData.customerId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // Помечаем сообщения от клиента как прочитанные
+                          const updatedMessages = (formData.messages || []).map(msg => {
+                            if (msg.fromRole === 'customer' && !msg.isRead) {
+                              return { ...msg, isRead: true, readAt: new Date().toISOString() };
+                            }
+                            return msg;
+                          });
+                          const changed = (formData.messages || []).some((msg, idx) => msg !== updatedMessages[idx]);
+                          if (changed) {
+                            setFormData(prev => ({ ...prev, messages: updatedMessages }));
+                            if (onUpdateOrder && formData.id) {
+                              const unreadCount = updatedMessages.filter(m => !m.isRead).length;
+                              onUpdateOrder(formData.id, { messages: updatedMessages, unreadMessages: unreadCount });
+                            }
+                          }
+                          setMessageModal({
+                            isOpen: true,
+                            mode: 'customer',
+                            targetId: formData.customerId || '',
+                            targetName: formData.customer || 'Клиент',
+                            message: ''
+                          });
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase flex items-center gap-1 transition-all ${
+                          (() => {
+                            const unreadFromCustomer = (formData.messages || []).filter(m =>
+                              m.fromRole === 'customer' && !m.isRead
+                            ).length;
+                            return unreadFromCustomer > 0
+                              ? 'bg-red-500/20 text-red-300 border border-red-500/30'
+                              : 'bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500/30';
+                          })()
+                        }`}
+                      >
+                        💬 Написать клиенту
+                        {(() => {
+                          const unreadFromCustomer = (formData.messages || []).filter(m =>
+                            m.fromRole === 'customer' && !m.isRead
+                          ).length;
+                          return unreadFromCustomer > 0 && (
+                            <span className="ml-1 bg-red-500 text-white px-1.5 py-0.5 rounded-full text-[8px]">
+                              +{unreadFromCustomer}
+                            </span>
+                          );
+                        })()}
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="text"
                     className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-4 text-sm font-black outline-none focus:border-blue-500"
@@ -1213,23 +1280,55 @@ const OrderForm: React.FC<OrderFormProps> = ({
                                 ❌ Снять
                               </button>
                             )}
-                            {/* Кнопка отправки сообщения подрядчику */}
-                            {driver.contractorId && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setMessageModal({
-                                    isOpen: true,
-                                    contractorId: driver.contractorId || '',
-                                    contractorName: driver.contractorName || driver.driverName,
-                                    message: ''
-                                  });
-                                }}
-                                className="px-3 py-2 min-h-[36px] rounded-xl text-[10px] font-black uppercase bg-blue-600/20 text-blue-400 hover:bg-blue-600 hover:text-white transition-all"
-                              >
-                                💬 Написать
-                              </button>
-                            )}
+                            {/* Кнопка отправки сообщения подрядчику (объединяет водителя и подрядчика) */}
+                            {(() => {
+                              // Считаем все непрочитанные сообщения от этого подрядчика/водителя
+                              const contractorMessages = (formData.messages || []).filter(m =>
+                                (m.toRole === 'contractor' && m.toId === driver.contractorId) ||
+                                (m.fromRole === 'contractor' && m.fromId === driver.contractorId) ||
+                                (m.toRole === 'driver' && m.toId === driver.contractorId) ||
+                                (m.fromRole === 'driver' && m.fromId === driver.contractorId)
+                              );
+                              const unreadCount = contractorMessages.filter(m =>
+                                (m.fromRole === 'contractor' || m.fromRole === 'driver') && !m.isRead
+                              ).length;
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    // Помечаем все сообщения от подрядчика/водителя как прочитанные
+                                    if (unreadCount > 0 && onUpdateOrder && formData.id) {
+                                      const updatedMessages = (formData.messages || []).map(msg => {
+                                        const isFromThisContractor =
+                                          ((msg.fromRole === 'contractor' || msg.fromRole === 'driver') &&
+                                           msg.fromId === driver.contractorId &&
+                                           !msg.isRead);
+                                        if (isFromThisContractor) {
+                                          return { ...msg, isRead: true, readAt: new Date().toISOString() };
+                                        }
+                                        return msg;
+                                      });
+                                      setFormData(prev => ({ ...prev, messages: updatedMessages }));
+                                      onUpdateOrder(formData.id, { messages: updatedMessages });
+                                    }
+                                    setMessageModal({
+                                      isOpen: true,
+                                      mode: 'contractor',
+                                      targetId: driver.contractorId || driver.id,
+                                      targetName: driver.contractorName || driver.driverName,
+                                      message: ''
+                                    });
+                                  }}
+                                  className={`px-3 py-2 min-h-[36px] rounded-xl text-[10px] font-black uppercase transition-all ${
+                                    unreadCount > 0
+                                      ? 'bg-blue-600 text-white animate-pulse'
+                                      : 'bg-blue-600/20 text-blue-400 hover:bg-blue-600 hover:text-white'
+                                  }`}
+                                >
+                                  💬 Подрядчик {unreadCount > 0 && `(${unreadCount})`}
+                                </button>
+                              );
+                            })()}
                             {/* Показываем сообщение если техника уже в работе */}
                             {!['assigned', 'confirmed'].includes(driver.status) && driver.status !== 'completed' && (
                               <span className="text-[10px] text-slate-500 italic">
@@ -1730,37 +1829,50 @@ const OrderForm: React.FC<OrderFormProps> = ({
         onCancel={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
       />
 
-      {/* Модалка отправки сообщения подрядчику */}
+      {/* Модалка отправки сообщения (подрядчику, водителю или клиенту) */}
       {messageModal.isOpen && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-[60] p-4">
           <div className="bg-[#12192c] rounded-3xl p-6 max-w-md w-full shadow-2xl border border-white/10 animate-in fade-in zoom-in duration-200">
             <h3 className="text-lg font-black uppercase tracking-tight mb-2">
-              💬 Сообщение подрядчику
+              💬 {messageModal.mode === 'customer' ? 'Сообщение клиенту' : 'Сообщение подрядчику'}
             </h3>
             <p className="text-sm text-slate-400 mb-4">
-              Получатель: <span className="text-white font-bold">{messageModal.contractorName}</span>
+              Получатель: <span className="text-white font-bold">{messageModal.targetName}</span>
             </p>
 
             {(() => {
-              const contractorMessages = (formData.messages || []).filter(m => {
-                const toThis = m.toRole === 'contractor' && m.toId === messageModal.contractorId;
-                const fromThis = m.fromRole === 'contractor' && m.fromId === messageModal.contractorId;
-                return toThis || fromThis;
-              });
+              // Фильтруем сообщения в зависимости от режима
+              const chatMessages = (formData.messages || []).filter(m => {
+                if (messageModal.mode === 'customer') {
+                  // Для клиента: сообщения от/к клиенту (dispatcher <-> customer)
+                  const toCustomer = m.toRole === 'customer';
+                  const fromCustomer = m.fromRole === 'customer';
+                  return toCustomer || fromCustomer;
+                } else {
+                  // Для подрядчика: сообщения от/к подрядчику И водителю (это одно лицо)
+                  const toContractor = m.toRole === 'contractor' && m.toId === messageModal.targetId;
+                  const fromContractor = m.fromRole === 'contractor' && m.fromId === messageModal.targetId;
+                  const toDriver = m.toRole === 'driver' && m.toId === messageModal.targetId;
+                  const fromDriver = m.fromRole === 'driver' && m.fromId === messageModal.targetId;
+                  return toContractor || fromContractor || toDriver || fromDriver;
+                }
+              }).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
               return (
                 <div ref={dispatcherChatRef} className="space-y-2 max-h-48 overflow-y-auto mb-4 pr-1">
-                  {contractorMessages.length === 0 ? (
+                  {chatMessages.length === 0 ? (
                     <div className="text-center text-slate-500 text-[10px] uppercase py-3">
                       Сообщений пока нет
                     </div>
                   ) : (
-                    contractorMessages.map(msg => {
-                      const isContractor = msg.fromRole === 'contractor';
+                    chatMessages.map(msg => {
+                      const isOther = messageModal.mode === 'customer'
+                        ? msg.fromRole === 'customer'
+                        : (msg.fromRole === 'contractor' || msg.fromRole === 'driver');
                       return (
-                        <div key={msg.id} className={`flex ${isContractor ? 'justify-start' : 'justify-end'}`}>
-                          <div className={`max-w-[75%] rounded-2xl p-3 ${isContractor ? 'bg-white/10 text-slate-200' : 'bg-blue-600 text-white'}`}>
-                            <div className={`text-[9px] mb-1 ${isContractor ? 'text-slate-400' : 'text-blue-100'}`}>
-                              {isContractor ? messageModal.contractorName : 'Диспетчер'} • {new Date(msg.timestamp).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}
+                        <div key={msg.id} className={`flex ${isOther ? 'justify-start' : 'justify-end'}`}>
+                          <div className={`max-w-[75%] rounded-2xl p-3 ${isOther ? 'bg-white/10 text-slate-200' : 'bg-blue-600 text-white'}`}>
+                            <div className={`text-[9px] mb-1 ${isOther ? 'text-slate-400' : 'text-blue-100'}`}>
+                              {isOther ? messageModal.targetName : 'Диспетчер'} • {new Date(msg.timestamp).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}
                             </div>
                             <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
                           </div>
@@ -1790,7 +1902,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
               </button>
               <button
                 type="button"
-                onClick={sendMessageToContractor}
+                onClick={sendMessage}
                 disabled={!messageModal.message.trim()}
                 className={`flex-1 py-4 min-h-[48px] rounded-xl text-[11px] font-black uppercase touch-feedback active:scale-95 ${
                   messageModal.message.trim()

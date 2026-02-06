@@ -9,6 +9,7 @@ import SalesManagerPortal from './SalesManagerPortal';
 import EstimatorPortal from './EstimatorPortal';
 import AccountantPortal from './AccountantPortal';
 import AdminPanel from './AdminPanel';
+import ActivityLogPanel from './ActivityLogPanel';
 import {
   AssetType,
   Bid,
@@ -50,8 +51,14 @@ import {
   CompanyType,
   PriceBookItem,
   CommissionSettings,
+  CompanySettings,
   Vehicle,
   USER_ROLE_LABELS,
+  ActivityLogEntry,
+  ActivityLogEntityType,
+  ActivityLogAction,
+  ACTIVITY_ACTION_LABELS,
+  ACTIVITY_ENTITY_LABELS,
 } from './types';
 
 // Расширенные роли
@@ -80,7 +87,9 @@ const LS_KEYS = {
   companies: 'snowforce_companies_v1',
   priceBook: 'snowforce_pricebook_v1',
   commissionSettings: 'snowforce_commission_v1',
+  companySettings: 'snowforce_company_settings_v1',
   vehicles: 'snowforce_vehicles_v1',
+  activityLog: 'snowforce_activity_log_v1',
 } as const;
 
 function safeJsonParse<T>(raw: string | null, fallback: T): T {
@@ -107,6 +116,30 @@ const safeJsonStringify = (value: unknown) => {
   } catch {
     return null;
   }
+};
+
+// Сжимает состояние для хранения в логе (убирает большие поля)
+const compressState = (state: unknown): unknown => {
+  if (!state || typeof state !== 'object') return state;
+  const obj = state as Record<string, unknown>;
+  // Сохраняем только ключевые поля для возможности отката
+  const compressed: Record<string, unknown> = {};
+  const allowedKeys = ['id', 'status', 'orderNumber', 'customer', 'customerId', 'name', 'phone', 'email',
+    'address', 'totalCustomerPrice', 'totalContractorPrice', 'grossProfit', 'serviceType', 'inn'];
+  for (const key of allowedKeys) {
+    if (key in obj) compressed[key] = obj[key];
+  }
+  // Для полного отката храним assetRequirements и driverDetails без фото
+  if ('assetRequirements' in obj && Array.isArray(obj.assetRequirements)) {
+    compressed.assetRequirements = obj.assetRequirements;
+  }
+  if ('driverDetails' in obj && Array.isArray(obj.driverDetails)) {
+    compressed.driverDetails = (obj.driverDetails as Record<string, unknown>[]).map(d => {
+      const { ...rest } = d;
+      return rest;
+    });
+  }
+  return compressed;
 };
 
 const shouldStoreUrl = (url?: string) => {
@@ -674,10 +707,30 @@ export default function App() {
     return Array.isArray(raw) ? raw : seedPriceBook();
   });
   const [commissionSettings, setCommissionSettings] = useState<CommissionSettings | null>(() => safeJsonParse(localStorage.getItem(LS_KEYS.commissionSettings), null));
+  const [companySettings, setCompanySettings] = useState<CompanySettings | null>(() => safeJsonParse(localStorage.getItem(LS_KEYS.companySettings), null));
   const [vehicles, setVehicles] = useState<Vehicle[]>(() => {
     const raw = safeJsonParse(localStorage.getItem(LS_KEYS.vehicles), seedVehicles());
     return Array.isArray(raw) ? raw : seedVehicles();
   });
+
+  // Журнал действий (с проверкой размера при загрузке)
+  const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>(() => {
+    try {
+      const rawStr = localStorage.getItem(LS_KEYS.activityLog);
+      // Если размер слишком большой - очищаем
+      if (rawStr && rawStr.length > 500000) { // > 500KB
+        console.warn('Журнал действий слишком большой, очищаем...');
+        localStorage.removeItem(LS_KEYS.activityLog);
+        return [];
+      }
+      const raw = safeJsonParse(rawStr, []);
+      return Array.isArray(raw) ? raw.slice(0, 200) : [];
+    } catch {
+      localStorage.removeItem(LS_KEYS.activityLog);
+      return [];
+    }
+  });
+  const [showActivityLog, setShowActivityLog] = useState(false);
 
   const [view, setView] = useState<'dashboard' | 'order-form' | 'customer-form' | 'contractor-form' | 'customers' | 'contractors'>('dashboard');
   const [editingOrder, setEditingOrder] = useState<Order | undefined>(undefined);
@@ -699,6 +752,21 @@ export default function App() {
   const [contractorDirectorySearch, setContractorDirectorySearch] = useState('');
 
   const [currentContractorId, setCurrentContractorId] = useState<string>(() => localStorage.getItem(LS_KEYS.contractorId) || contractors[0]?.id || '');
+  // Очистка переполненного хранилища при старте
+  useEffect(() => {
+    try {
+      const logStr = localStorage.getItem(LS_KEYS.activityLog);
+      if (logStr && logStr.length > 300000) { // > 300KB - слишком много
+        console.warn('Очистка переполненного журнала действий');
+        localStorage.removeItem(LS_KEYS.activityLog);
+        setActivityLog([]);
+      }
+    } catch {
+      localStorage.removeItem(LS_KEYS.activityLog);
+      setActivityLog([]);
+    }
+  }, []);
+
   // Persist
   useEffect(() => localStorage.setItem(LS_KEYS.role, role), [role]);
   useEffect(() => localStorage.setItem(LS_KEYS.manager, currentManager), [currentManager]);
@@ -721,7 +789,99 @@ export default function App() {
   useEffect(() => localStorage.setItem(LS_KEYS.companies, JSON.stringify(companies)), [companies]);
   useEffect(() => localStorage.setItem(LS_KEYS.priceBook, JSON.stringify(priceBook)), [priceBook]);
   useEffect(() => { if (commissionSettings) localStorage.setItem(LS_KEYS.commissionSettings, JSON.stringify(commissionSettings)); }, [commissionSettings]);
+  useEffect(() => { if (companySettings) localStorage.setItem(LS_KEYS.companySettings, JSON.stringify(companySettings)); }, [companySettings]);
   useEffect(() => localStorage.setItem(LS_KEYS.vehicles, JSON.stringify(vehicles)), [vehicles]);
+  // Сохраняем журнал с обработкой ошибок и ограничением размера
+  useEffect(() => {
+    try {
+      // Ограничиваем prevState/newState для экономии места
+      const compressedLog = activityLog.slice(0, 200).map(entry => ({
+        ...entry,
+        prevState: entry.prevState ? compressState(entry.prevState) : null,
+        newState: entry.newState ? compressState(entry.newState) : null,
+      }));
+      localStorage.setItem(LS_KEYS.activityLog, JSON.stringify(compressedLog));
+    } catch (e) {
+      console.warn('Не удалось сохранить журнал действий:', e);
+      // При ошибке квоты - очищаем старые записи
+      if (e instanceof DOMException && e.name === 'QuotaExceededError') {
+        try {
+          const minimalLog = activityLog.slice(0, 50).map(entry => ({
+            ...entry,
+            prevState: null,
+            newState: null,
+          }));
+          localStorage.setItem(LS_KEYS.activityLog, JSON.stringify(minimalLog));
+        } catch {
+          localStorage.removeItem(LS_KEYS.activityLog);
+        }
+      }
+    }
+  }, [activityLog]);
+
+  // Функция для добавления записи в лог
+  const addActivityLog = useCallback((
+    entry: Omit<ActivityLogEntry, 'id' | 'timestamp'>
+  ) => {
+    const newEntry: ActivityLogEntry = {
+      ...entry,
+      id: generateId(),
+      timestamp: new Date().toISOString(),
+    };
+    setActivityLog(prev => [newEntry, ...prev].slice(0, 200)); // Храним последние 200 записей
+  }, []);
+
+  // Функция для отката действия
+  const revertActivity = useCallback((logEntry: ActivityLogEntry) => {
+    if (!logEntry.isReversible || logEntry.isReverted) return;
+
+    const { entityType, entityId, prevState, action } = logEntry;
+    const now = new Date().toISOString();
+
+    if (entityType === 'order') {
+      if (action === 'delete' && prevState) {
+        // Восстановление удалённого заказа
+        setOrders(prev => [prevState as Order, ...prev]);
+      } else if (action === 'create') {
+        // Удаление созданного заказа
+        setOrders(prev => prev.filter(o => o.id !== entityId));
+      } else if (prevState) {
+        // Откат изменений заказа
+        setOrders(prev => prev.map(o => o.id === entityId ? { ...(prevState as Order), updatedAt: now } : o));
+      }
+    } else if (entityType === 'customer') {
+      if (action === 'delete' && prevState) {
+        setCustomers(prev => [prevState as Customer, ...prev]);
+      } else if (action === 'create') {
+        setCustomers(prev => prev.filter(c => c.id !== entityId));
+      } else if (prevState) {
+        setCustomers(prev => prev.map(c => c.id === entityId ? (prevState as Customer) : c));
+      }
+    } else if (entityType === 'contractor') {
+      if (action === 'delete' && prevState) {
+        setContractors(prev => [prevState as Contractor, ...prev]);
+      } else if (action === 'create') {
+        setContractors(prev => prev.filter(c => c.id !== entityId));
+      } else if (prevState) {
+        setContractors(prev => prev.map(c => c.id === entityId ? (prevState as Contractor) : c));
+      }
+    } else if (entityType === 'lead') {
+      if (action === 'delete' && prevState) {
+        setLeads(prev => [prevState as Lead, ...prev]);
+      } else if (action === 'create') {
+        setLeads(prev => prev.filter(l => l.id !== entityId));
+      } else if (prevState) {
+        setLeads(prev => prev.map(l => l.id === entityId ? (prevState as Lead) : l));
+      }
+    }
+
+    // Помечаем запись как откаченную
+    setActivityLog(prev => prev.map(e =>
+      e.id === logEntry.id
+        ? { ...e, isReverted: true, revertedAt: now, revertedBy: ROLE_LABELS[role] }
+        : e
+    ));
+  }, [role]);
 
   const resetOrdersAndTrips = useCallback(() => {
     const confirmed = window.confirm('Сбросить все заказы и рейсы? Данные будут удалены.');
@@ -753,7 +913,9 @@ export default function App() {
     const customerTerm = customerFilterText.trim().toLowerCase();
     const list = managerOrders.filter(o => {
       const isClosed = [OrderStatus.COMPLETED, OrderStatus.CANCELLED].includes(o.status as OrderStatus);
-      if (!showCompleted && isClosed) return false;
+      // Если явно выбран статус "Завершено" или "Отменено" - показываем эти заказы
+      const isFilteringByClosedStatus = [OrderStatus.COMPLETED, OrderStatus.CANCELLED].includes(statusFilter as OrderStatus);
+      if (!showCompleted && isClosed && !isFilteringByClosedStatus) return false;
       if (statusFilter !== 'all' && o.status !== statusFilter) return false;
       if (customerFilterId && o.customerId !== customerFilterId) return false;
       if (!customerFilterId && customerTerm && !o.customer.toLowerCase().includes(customerTerm)) return false;
@@ -770,7 +932,7 @@ export default function App() {
       const delta = getOrderSortTimestamp(a) - getOrderSortTimestamp(b);
       return sortOrder === 'newest' ? -delta : delta;
     });
-  }, [managerOrders, orderSearch, statusFilter, customerFilterId, customerFilterText, dateRange, sortOrder]);
+  }, [managerOrders, orderSearch, statusFilter, customerFilterId, customerFilterText, dateRange, sortOrder, showCompleted]);
 
   const hasFilters = Boolean(
     orderSearch.trim() ||
@@ -858,15 +1020,60 @@ export default function App() {
         feedback: partial.feedback,
       };
       setOrders(prev => [order, ...prev]);
+
+      // Логируем создание заказа
+      addActivityLog({
+        userId: undefined,
+        userName: ROLE_LABELS[role],
+        userRole: role,
+        entityType: 'order',
+        entityId: order.id,
+        entityName: order.orderNumber || order.customer,
+        action: 'create',
+        actionLabel: 'Создан заказ',
+        description: `Создан заказ ${order.orderNumber} для ${order.customer}`,
+        prevState: null,
+        newState: order,
+        isReversible: true,
+        isReverted: false,
+      });
     },
-    [currentManager]
+    [currentManager, addActivityLog, role]
   );
 
   const updateOrder = useCallback((orderId: string, updates: Partial<Order>) => {
-    setOrders(prev =>
-      prev.map(o => (o.id === orderId ? ({ ...o, ...updates, updatedAt: new Date().toISOString() } as Order) : o))
-    );
-  }, []);
+    setOrders(prev => {
+      const oldOrder = prev.find(o => o.id === orderId);
+      const newOrders = prev.map(o => (o.id === orderId ? ({ ...o, ...updates, updatedAt: new Date().toISOString() } as Order) : o));
+
+      // Логируем изменение заказа (только для значимых изменений)
+      if (oldOrder && (updates.status || updates.isPaid !== undefined || updates.totalCustomerPrice !== undefined)) {
+        const newOrder = newOrders.find(o => o.id === orderId);
+        const action: ActivityLogAction = updates.status && updates.status !== oldOrder.status ? 'status_change' : 'update';
+        const description = updates.status && updates.status !== oldOrder.status
+          ? `Статус изменён: ${oldOrder.status} → ${updates.status}`
+          : 'Обновлён заказ';
+
+        addActivityLog({
+          userId: undefined,
+          userName: ROLE_LABELS[role],
+          userRole: role,
+          entityType: 'order',
+          entityId: orderId,
+          entityName: oldOrder.orderNumber || oldOrder.customer,
+          action,
+          actionLabel: action === 'status_change' ? 'Смена статуса' : 'Изменение',
+          description,
+          prevState: oldOrder,
+          newState: newOrder,
+          isReversible: true,
+          isReverted: false,
+        });
+      }
+
+      return newOrders;
+    });
+  }, [addActivityLog, role]);
 
   const onSubmitOrderForm = useCallback(
     (data: Partial<Order>, keepOpen?: boolean) => {
@@ -1871,13 +2078,14 @@ export default function App() {
           />
         )}
 
-        {role === 'customer' && <CustomerPortal orders={orders} customers={customers} onAddOrder={addOrder} onUpdateOrder={updateOrder} />}
+        {role === 'customer' && <CustomerPortal orders={orders} customers={customers} companySettings={companySettings} onAddOrder={addOrder} onUpdateOrder={updateOrder} />}
 
         {role === 'contractor' && (
           <ContractorPortal
             orders={orders}
             contractors={contractors}
             currentContractorId={currentContractorId || contractors[0]?.id || ''}
+            vehicles={vehicles}
             onSubmitBid={submitBid}
             onWithdrawBid={withdrawBid}
             onUpdateContractor={onUpdateContractor}
@@ -1937,6 +2145,7 @@ export default function App() {
             companies={companies}
             priceBook={priceBook}
             commissionSettings={commissionSettings}
+            companySettings={companySettings}
             vehicles={vehicles}
             onAddUser={addUser}
             onUpdateUser={updateUser}
@@ -1946,8 +2155,12 @@ export default function App() {
             onUpdatePriceItem={updatePriceItem}
             onDeletePriceItem={deletePriceItem}
             onUpdateCommissionSettings={setCommissionSettings}
+            onUpdateCompanySettings={setCompanySettings}
             onAddVehicle={addVehicle}
             onUpdateVehicle={updateVehicle}
+            activityLog={activityLog}
+            onRevertActivity={revertActivity}
+            onClearActivityLog={() => setActivityLog([])}
           />
         )}
       </div>
