@@ -3,6 +3,13 @@ import { Order, OrderStatus, AssetType, Contractor, Bid, DriverAssignment, Messa
 import DriverPortal from './DriverPortal';
 import ConfirmModal from './ConfirmModal';
 
+// Декларация для Leaflet (карты)
+declare global {
+  interface Window {
+    L: any;
+  }
+}
+
 interface ContractorPortalProps {
   orders: Order[];
   contractors: Contractor[];
@@ -87,6 +94,20 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
   // Реф для авто-скролла чата
   const chatMessagesRef = useRef<HTMLDivElement>(null);
 
+  // === Карта для биржи ===
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<any>(null);
+  const markersRef = useRef<any[]>([]);
+  const [hoveredMapId, setHoveredMapId] = useState<string | null>(null);
+  const defaultCenter: [number, number] = [55.7512, 37.6184]; // Москва
+
+  // Проверка валидности координат
+  const isValidCoords = useCallback((coords: [number, number] | undefined): boolean => {
+    if (!coords || !Array.isArray(coords) || coords.length < 2) return false;
+    const [lat, lng] = coords;
+    return lat >= 54 && lat <= 57 && lng >= 35 && lng <= 40;
+  }, []);
+
   // Текущий подрядчик
   const currentContractor = useMemo(() => {
     return contractors.find(c => c.id === currentContractorId);
@@ -94,24 +115,62 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
   const contractorRating = currentContractor ? Number(currentContractor.rating) || 0 : 0;
 
   // Доступные заказы на бирже (зависят от флага биржи)
+  // Подрядчик видит заказ, если есть незакрытые позиции по типам техники,
+  // на которые он ещё НЕ назначен
   const availableOrders = useMemo(() => {
-    return orders.filter(o => 
-      o.isBirzhaOpen &&
-      ![OrderStatus.COMPLETED, OrderStatus.CANCELLED].includes(normalizeOrderStatus(o.status)) &&
-      o.assetRequirements.some(req => !req.contractorId) &&
-      !(
-        (o.driverDetails || []).some(d => d.contractorId === currentContractorId && d.status !== 'cancelled') ||
-        (o.assignments || []).some(a => a.contractorId === currentContractorId && a.status !== 'cancelled')
-      )
-    );
+    return orders.filter(o => {
+      if (!o.isBirzhaOpen) return false;
+      if ([OrderStatus.COMPLETED, OrderStatus.CANCELLED].includes(normalizeOrderStatus(o.status))) return false;
+
+      // Типы техники, на которые подрядчик уже назначен в этом заказе
+      const assignedAssetTypes = new Set<AssetType>();
+      (o.driverDetails || []).forEach(d => {
+        if (d.contractorId === currentContractorId && d.status !== 'cancelled') {
+          assignedAssetTypes.add(d.assetType);
+        }
+      });
+
+      // Проверяем, есть ли незакрытые требования по типам техники,
+      // на которые подрядчик ещё НЕ назначен
+      const hasUnfilledOtherTypes = o.assetRequirements.some(req => {
+        // Требование открыто (нет закреплённого подрядчика)
+        if (req.contractorId) return false;
+
+        // Сколько уже назначено по этому типу
+        const assignedCount = (o.driverDetails || []).filter(d =>
+          d.assetType === req.type && d.status !== 'cancelled'
+        ).length;
+        const requiredCount = req.plannedUnits || 1;
+        const remaining = requiredCount - assignedCount;
+
+        // Есть свободные места И подрядчик не назначен на этот тип
+        return remaining > 0 && !assignedAssetTypes.has(req.type);
+      });
+
+      return hasUnfilledOtherTypes;
+    });
   }, [orders, currentContractorId]);
 
   // Прямые предложения (только если диспетчер предложил именно этому подрядчику)
+  // Показываем только если есть незакрытые места (подрядчик ещё не полностью назначен)
   const directOffers = useMemo(() => {
-    return orders.filter(o =>
-      ![OrderStatus.COMPLETED, OrderStatus.CANCELLED].includes(normalizeOrderStatus(o.status)) &&
-      o.assetRequirements.some(req => req.contractorId === currentContractorId)
-    );
+    return orders.filter(o => {
+      if ([OrderStatus.COMPLETED, OrderStatus.CANCELLED].includes(normalizeOrderStatus(o.status))) return false;
+
+      // Проверяем, есть ли требования для этого подрядчика с оставшимися местами
+      return o.assetRequirements.some(req => {
+        if (req.contractorId !== currentContractorId) return false;
+
+        // Считаем активные назначения (не отменённые)
+        const assigned = (o.driverDetails || []).filter(d =>
+          d.assetType === req.type &&
+          d.contractorId === currentContractorId &&
+          d.status !== 'cancelled'
+        ).length;
+        const remaining = (req.plannedUnits || 1) - assigned;
+        return remaining > 0; // Есть незакрытые места
+      });
+    });
   }, [orders, currentContractorId]);
 
   // Активные заказы (где работает техника подрядчика)
@@ -153,10 +212,33 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 
   const driverOrdersInWork = useMemo(() => {
     return orders.filter(order => {
-      if (normalizeOrderStatus(order.status) === OrderStatus.CANCELLED) return false;
-      const myAssignments = (order.driverDetails || []).filter(d => d.contractorId === currentContractorId);
-      if (myAssignments.length === 0) return false;
-      return myAssignments.some(d => d.status !== 'completed' && d.status !== 'cancelled');
+      const status = normalizeOrderStatus(order.status);
+      if (status === OrderStatus.CANCELLED || status === OrderStatus.COMPLETED) return false;
+
+      // Проверяем назначения водителей (driverDetails)
+      const myDriverAssignments = (order.driverDetails || []).filter(d =>
+        d.contractorId === currentContractorId && d.status !== 'cancelled'
+      );
+
+      // Проверяем требования (assetRequirements) — прямые предложения или принятые биды
+      const myRequirementAssignments = (order.assetRequirements || []).filter(req =>
+        req.contractorId === currentContractorId
+      );
+
+      // Проверяем принятые биды
+      const myAcceptedBids = (order.bids || []).filter(b =>
+        b.contractorId === currentContractorId && b.status === 'accepted'
+      );
+
+      // Заказ отображается если:
+      // 1. Есть назначенные водители от этого подрядчика
+      // 2. ИЛИ есть требования закреплённые за этим подрядчиком
+      // 3. ИЛИ есть принятые биды от этого подрядчика
+      if (myDriverAssignments.length > 0) {
+        return myDriverAssignments.some(d => d.status !== 'completed');
+      }
+
+      return myRequirementAssignments.length > 0 || myAcceptedBids.length > 0;
     });
   }, [orders, currentContractorId]);
 
@@ -429,6 +511,144 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
     }
   }, [chatModal.isOpen, chatMessages.length]);
 
+  // === Инициализация карты биржи ===
+  useEffect(() => {
+    if (activeTab !== 'available' || !mapRef.current || !window.L) return;
+
+    // Инициализация карты один раз
+    if (!mapInstanceRef.current) {
+      mapInstanceRef.current = window.L.map(mapRef.current, {
+        center: defaultCenter,
+        zoom: 11,
+        zoomControl: true,
+      });
+
+      window.L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        attribution: '© OpenStreetMap, © CartoDB',
+      }).addTo(mapInstanceRef.current);
+
+      // Исправляем размеры карты после рендера
+      setTimeout(() => {
+        mapInstanceRef.current?.invalidateSize();
+      }, 100);
+    } else {
+      // Если карта уже существует, обновляем размеры при возврате на таб
+      setTimeout(() => {
+        mapInstanceRef.current?.invalidateSize();
+      }, 100);
+    }
+
+    return () => {
+      // Cleanup при смене таба
+    };
+  }, [activeTab]);
+
+  // === Обновление маркеров на карте биржи ===
+  useEffect(() => {
+    if (activeTab !== 'available' || !mapInstanceRef.current) return;
+
+    // Удаляем старые маркеры
+    markersRef.current.forEach(m => m.remove());
+    markersRef.current = [];
+
+    // Добавляем маркеры для заказов биржи
+    filteredAvailableOrders.forEach(order => {
+      const coords = isValidCoords(order.coordinates) ? order.coordinates : defaultCenter;
+      const isHovered = hoveredMapId === order.id;
+
+      // Собираем информацию о требуемой технике
+      const requirements = order.assetRequirements || [];
+      const truckReq = requirements.filter(r => r.type === AssetType.TRUCK);
+      const loaderReq = requirements.filter(r => r.type === AssetType.LOADER || r.type === AssetType.MINI_LOADER);
+
+      const totalTrucks = truckReq.reduce((sum, r) => sum + (r.plannedUnits || 1), 0);
+      const totalLoaders = loaderReq.reduce((sum, r) => sum + (r.plannedUnits || 1), 0);
+
+      // Количество рейсов (для самосвалов)
+      const plannedTrips = order.plannedTrips || truckReq.reduce((sum, r) => sum + (r.trips || 0), 0);
+
+      // Количество смен (для погрузчиков) - берём из первого requirement
+      const loaderShifts = loaderReq.length > 0 ? (loaderReq[0].shifts || 1) : 1;
+
+      // Цена (берём максимальную из всех позиций)
+      const maxTruckPrice = truckReq.length > 0 ? Math.max(...truckReq.map(r => r.contractorPrice || 0)) : 0;
+      const maxLoaderPrice = loaderReq.length > 0 ? Math.max(...loaderReq.map(r => r.contractorPrice || 0)) : 0;
+
+      // Создаём кастомную иконку
+      const size = isHovered ? 42 : 36;
+      const icon = window.L.divIcon({
+        className: 'custom-marker',
+        html: `
+          <div style="
+            width: ${size}px;
+            height: ${size}px;
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 700;
+            font-size: ${isHovered ? '16px' : '14px'};
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.5);
+            border: 3px solid white;
+            transition: all 0.2s;
+            ${isHovered ? 'transform: scale(1.15);' : ''}
+          ">
+            💰
+          </div>
+        `,
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2],
+      });
+
+      const marker = window.L.marker(coords, { icon }).addTo(mapInstanceRef.current);
+
+      // Popup с информацией (только адрес, цена, техника)
+      marker.bindPopup(`
+        <div style="min-width: 220px; padding: 8px;">
+          <div style="font-weight: 700; font-size: 14px; color: #1e293b; margin-bottom: 8px; line-height: 1.3;">
+            📍 ${order.address}
+          </div>
+
+          ${totalTrucks > 0 ? `
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; padding: 8px; background: #f8fafc; border-radius: 8px;">
+              <span style="font-size: 20px;">🚛</span>
+              <div>
+                <div style="font-weight: 600; font-size: 13px;">Самосвал × ${totalTrucks}</div>
+                <div style="color: #22c55e; font-weight: 700; font-size: 14px;">${formatPrice(maxTruckPrice)}/рейс</div>
+                ${plannedTrips > 0 ? `<div style="color: #64748b; font-size: 11px;">📦 ${plannedTrips} рейсов</div>` : ''}
+              </div>
+            </div>
+          ` : ''}
+
+          ${totalLoaders > 0 ? `
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; padding: 8px; background: #f8fafc; border-radius: 8px;">
+              <span style="font-size: 20px;">🚜</span>
+              <div>
+                <div style="font-weight: 600; font-size: 13px;">Погрузчик × ${totalLoaders}</div>
+                <div style="color: #22c55e; font-weight: 700; font-size: 14px;">${formatPrice(maxLoaderPrice)}/смена</div>
+                <div style="color: #64748b; font-size: 11px;">⏱️ ${loaderShifts} ${loaderShifts === 1 ? 'смена' : 'смен'}</div>
+              </div>
+            </div>
+          ` : ''}
+
+          <div style="margin-top: 8px; color: #64748b; font-size: 11px;">
+            📅 ${formatDateTime(order.scheduledTime)}
+          </div>
+        </div>
+      `, { maxWidth: 280 });
+
+      marker.on('mouseover', () => {
+        setHoveredMapId(order.id);
+        marker.openPopup();
+      });
+      marker.on('mouseout', () => setHoveredMapId(null));
+
+      markersRef.current.push(marker);
+    });
+  }, [activeTab, filteredAvailableOrders, hoveredMapId, isValidCoords]);
+
   // Отправка отклика
   const handleSubmitBid = useCallback(() => {
     if (!selectedOrder || !currentContractor) return;
@@ -639,6 +859,30 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
         {/* === БИРЖА === */}
         {activeTab === 'available' && (
           <div className="space-y-4 animate-in fade-in">
+            {/* Карта заказов на бирже */}
+            {filteredAvailableOrders.length > 0 && (
+              <div className="bg-[#12192c] rounded-2xl border border-white/5 overflow-hidden">
+                <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
+                    <span className="text-lg">🗺️</span> Карта заказов
+                  </h3>
+                  <span className="text-[9px] text-slate-500">{filteredAvailableOrders.length} {filteredAvailableOrders.length === 1 ? 'заказ' : 'заказов'}</span>
+                </div>
+                <div
+                  ref={mapRef}
+                  className="w-full h-[280px] md:h-[350px]"
+                  style={{ background: '#e5e7eb' }}
+                />
+                <div className="px-4 py-2 bg-white/5 flex items-center gap-4">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-full bg-blue-500"></span>
+                    <span className="text-[9px] text-slate-400">Ищут технику</span>
+                  </div>
+                  <div className="text-[9px] text-slate-500">Нажмите на маркер для деталей</div>
+                </div>
+              </div>
+            )}
+
             {/* Мои отклики - сгруппированные по заказам */}
             {visibleMyBids.length > 0 && (() => {
               // Группируем отклики по заказам
@@ -714,11 +958,39 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
               </div>
             ) : (
               filteredAvailableOrders.map(order => {
-                const birzhaRequirements = order.assetRequirements.filter(r => !r.contractorId);
+                // Типы техники, на которые подрядчик уже назначен
+                const myAssignedTypes = new Set<AssetType>();
+                (order.driverDetails || []).forEach(d => {
+                  if (d.contractorId === currentContractorId && d.status !== 'cancelled') {
+                    myAssignedTypes.add(d.assetType);
+                  }
+                });
+
+                // Фильтруем требования: открытые, с оставшимися местами, и не тот тип что уже назначен
+                const birzhaRequirements = order.assetRequirements.filter(r => {
+                  if (r.contractorId) return false; // Закреплено за другим подрядчиком
+                  if (myAssignedTypes.has(r.type)) return false; // Уже назначен на этот тип
+                  const assignedCount = (order.driverDetails || []).filter(d => d.assetType === r.type && d.status !== 'cancelled').length;
+                  const remaining = (r.plannedUnits || 1) - assignedCount;
+                  return remaining > 0; // Есть свободные места
+                });
+
                 const hasAnyMyBid = filteredMyBids.some(b => b.order.id === order.id);
-                
+                const isHighlighted = hoveredMapId === order.id;
+
                 return (
-                  <div key={order.id} className={`bg-[#12192c] rounded-2xl border ${hasAnyMyBid ? 'border-blue-500/50' : 'border-white/5'} overflow-hidden shadow-xl`}>
+                  <div
+                    key={order.id}
+                    onMouseEnter={() => setHoveredMapId(order.id)}
+                    onMouseLeave={() => setHoveredMapId(null)}
+                    className={`bg-[#12192c] rounded-2xl border transition-all duration-200 overflow-hidden shadow-xl ${
+                      isHighlighted
+                        ? 'border-blue-500 ring-2 ring-blue-500/30 scale-[1.01]'
+                        : hasAnyMyBid
+                          ? 'border-blue-500/50'
+                          : 'border-white/5'
+                    }`}
+                  >
                     <div className="p-5">
                       <div className="flex justify-between items-start mb-3">
                         <div>
@@ -746,13 +1018,14 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                           const remaining = Math.max(0, (req.plannedUnits || 1) - assignedCount);
                           const bidKey = `${order.id}::${req.type}`;
                           const myBidForType = latestBidByOrderAndType.get(bidKey);
-                          const hasMyBidForType = Boolean(myBidForType);
-                          
+                          // Активный бид - только pending или accepted. withdrawn/rejected - можно откликаться заново
+                          const hasActiveBid = myBidForType && ['pending', 'accepted'].includes(myBidForType.bid.status);
+
                           const isTruck = req.type === AssetType.TRUCK;
                           const typeName = req.type === AssetType.LOADER ? 'Погрузчик' : req.type === AssetType.MINI_LOADER ? 'Мини-погрузчик' : 'Самосвал';
                           const bidStatusLabel = getBidStatusLabel(myBidForType?.bid.status);
                           const basePrice = req.contractorPrice || 0;
-                          
+
                           return (
                             <div key={i} className="flex items-center justify-between bg-white/5 p-3 rounded-xl">
                               <div className="flex items-center gap-3">
@@ -770,7 +1043,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                                   <div className="text-lg font-black text-green-400">{formatPrice(req.contractorPrice)}</div>
                                   <div className="text-[8px] text-slate-500">{isTruck ? 'за рейс' : 'за смену'}</div>
                                 </div>
-                                {!hasMyBidForType ? (
+                                {!hasActiveBid ? (
                                   <div className="flex flex-col items-end gap-2">
                                     <input
                                       type="number"
@@ -879,12 +1152,18 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 
                       <div className="space-y-2">
                         {directRequirements.map((req, i) => {
-                          const assigned = (order.driverDetails || []).filter(d => d.assetType === req.type && d.contractorId === currentContractorId).length;
+                          // Считаем только активные назначения (не отменённые)
+                          const assigned = (order.driverDetails || []).filter(d =>
+                            d.assetType === req.type &&
+                            d.contractorId === currentContractorId &&
+                            d.status !== 'cancelled'
+                          ).length;
                           const remaining = (req.plannedUnits || 1) - assigned;
                           if (remaining <= 0) return null;
                           const bidKey = `${order.id}::${req.type}`;
                           const myBidForType = latestBidByOrderAndType.get(bidKey);
-                          const hasMyBidForType = Boolean(myBidForType);
+                          // Активный бид - только pending или accepted. withdrawn/rejected - можно откликаться заново
+                          const hasActiveBid = myBidForType && ['pending', 'accepted'].includes(myBidForType.bid.status);
                           const bidStatusLabel = getBidStatusLabel(myBidForType?.bid.status);
                           const basePrice = req.contractorPrice || 0;
                           return (
@@ -900,7 +1179,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                               </div>
                               <div className="flex items-center gap-3">
                                 <div className="text-lg font-black text-green-400">{formatPrice(req.contractorPrice)}</div>
-                                {!hasMyBidForType ? (
+                                {!hasActiveBid ? (
                                   <div className="flex flex-col items-end gap-2">
                                     <input
                                       type="number"

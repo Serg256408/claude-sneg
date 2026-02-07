@@ -9,6 +9,7 @@ if (fontBundle?.vfs) {
   (pdfMake as any).vfs = fontBundle.vfs;
 }
 import { Order, OrderStatus, AssetType, AssetRequirement, OrderRestrictions, CustomerContact, Customer, Message, CompanySettings, formatPrice, formatDateTime, generateId, generateOrderNumber, PriceUnit, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateOrderTotals, getUnitsForRequirement, getTripCounts, isTruckType, isLoaderType, toLocalDateTimeInputValue } from './types';
+import AddressInput from './AddressInput';
 
 interface CustomerPortalProps {
   orders: Order[];
@@ -1764,13 +1765,18 @@ ${confirmedEvidences.map((ev, i) =>
                 <h3 className="text-[11px] font-black uppercase tracking-widest text-blue-400 mb-6 flex items-center gap-2">
                   📍 <span className="text-white opacity-80">Адрес объекта</span>
                 </h3>
-                <input
-                  required
-                  type="text"
-                  className="w-full bg-[#0a0f1d] border border-white/10 rounded-2xl p-4 text-lg font-black outline-none focus:border-blue-500 transition-all placeholder:text-slate-700 mb-4"
-                  placeholder="Улица, дом"
+                <AddressInput
                   value={formData.address}
-                  onChange={e => setFormData({ ...formData, address: e.target.value })}
+                  onChange={(address, coords) => {
+                    setFormData({
+                      ...formData,
+                      address,
+                      ...(coords ? { coordinates: coords } : {})
+                    });
+                  }}
+                  placeholder="Начните вводить адрес..."
+                  className="w-full bg-[#0a0f1d] border border-white/10 rounded-2xl p-4 text-lg font-black text-white outline-none focus:border-blue-500 transition-all placeholder:text-slate-700 mb-4"
+                  required
                 />
                 <input
                   type="datetime-local"

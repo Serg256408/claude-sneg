@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Order, OrderStatus, ManagerName, Contractor, AssetRequirement, AssetType, Customer, Bid, Quote, ActionLog, Message, DriverAssignment, formatPrice, formatDateTime, generateId, PriceUnit, FULL_ORDER_STATUS_FLOW, getOrderStatusLabel, getNormalizedStatusLabel, normalizeOrderStatus, calculateOrderTotals, isTruckType, isLoaderType, toLocalDateTimeInputValue, WORKFLOW_STAGES, getStatusStage, getShiftHours } from './types';
 import ConfirmModal from './ConfirmModal';
+import AddressInput from './AddressInput';
 
 interface OrderFormProps {
   initialData?: Order;
@@ -329,39 +330,44 @@ const OrderForm: React.FC<OrderFormProps> = ({
   };
 
   const updateAsset = (idx: number, field: keyof AssetRequirement, value: any) => {
-    setFormData(prev => {
-      const updated = [...(prev.assetRequirements || [])];
-      if (!updated[idx]) return prev;
-      if (field === 'contractorId') {
-        const c = contractors.find(item => item.id === value);
-        updated[idx] = { ...updated[idx], contractorId: value, contractorName: c ? c.name : 'Биржа' };
-      } else {
-        updated[idx] = { ...updated[idx], [field]: value };
-      }
+    const updated = [...(formData.assetRequirements || [])];
+    if (!updated[idx]) return;
 
-      let updatedDrivers = prev.driverDetails;
-      let updatedAssignments = prev.assignments;
-      if (field === 'contractorPrice') {
-        const targetRequirement = updated[idx];
-        const newPrice = Number(value) || 0;
-        updatedDrivers = (prev.driverDetails || []).map(driver => {
-          const sameGroup = isSameAssetGroupLocal(driver.assetType, targetRequirement.type);
-          const contractorMatches = targetRequirement.contractorId
-            ? driver.contractorId === targetRequirement.contractorId
-            : !driver.contractorId;
-          return sameGroup && contractorMatches ? { ...driver, assignedPrice: newPrice } : driver;
-        });
-        updatedAssignments = (prev.assignments || []).map(assignment => {
-          const sameGroup = isSameAssetGroupLocal(assignment.assetType, targetRequirement.type);
-          const contractorMatches = targetRequirement.contractorId
-            ? assignment.contractorId === targetRequirement.contractorId
-            : !assignment.contractorId;
-          return sameGroup && contractorMatches ? { ...assignment, assignedPrice: newPrice } : assignment;
-        });
-      }
+    if (field === 'contractorId') {
+      const c = contractors.find(item => item.id === value);
+      updated[idx] = { ...updated[idx], contractorId: value, contractorName: c ? c.name : 'Биржа' };
+    } else {
+      updated[idx] = { ...updated[idx], [field]: value };
+    }
 
-      return { ...prev, assetRequirements: updated, driverDetails: updatedDrivers, assignments: updatedAssignments };
-    });
+    let updatedDrivers = formData.driverDetails;
+    let updatedAssignments = formData.assignments;
+    if (field === 'contractorPrice') {
+      const targetRequirement = updated[idx];
+      const newPrice = Number(value) || 0;
+      updatedDrivers = (formData.driverDetails || []).map(driver => {
+        const sameGroup = isSameAssetGroupLocal(driver.assetType, targetRequirement.type);
+        const contractorMatches = targetRequirement.contractorId
+          ? driver.contractorId === targetRequirement.contractorId
+          : !driver.contractorId;
+        return sameGroup && contractorMatches ? { ...driver, assignedPrice: newPrice } : driver;
+      });
+      updatedAssignments = (formData.assignments || []).map(assignment => {
+        const sameGroup = isSameAssetGroupLocal(assignment.assetType, targetRequirement.type);
+        const contractorMatches = targetRequirement.contractorId
+          ? assignment.contractorId === targetRequirement.contractorId
+          : !assignment.contractorId;
+        return sameGroup && contractorMatches ? { ...assignment, assignedPrice: newPrice } : assignment;
+      });
+    }
+
+    const newFormData = { ...formData, assetRequirements: updated, driverDetails: updatedDrivers, assignments: updatedAssignments };
+    setFormData(newFormData);
+
+    // Автосохранение при изменении подрядчика (чтобы прямые предложения сразу появлялись)
+    if (field === 'contractorId' && formData.id) {
+      onSubmit(newFormData, true);
+    }
   };
 
   const addAsset = (type: AssetType) => {
@@ -976,12 +982,17 @@ const OrderForm: React.FC<OrderFormProps> = ({
                 </div>
                 <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5">
                   <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Адрес объекта</label>
-                  <input
-                    type="text"
-                    className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-4 text-sm font-black outline-none focus:border-blue-500"
-                    value={formData.address}
-                    onChange={e => setFormData({ ...formData, address: e.target.value })}
-                    placeholder="Улица, дом"
+                  <AddressInput
+                    value={formData.address || ''}
+                    onChange={(address, coords) => {
+                      setFormData({
+                        ...formData,
+                        address,
+                        ...(coords ? { coordinates: coords } : {})
+                      });
+                    }}
+                    placeholder="Начните вводить адрес..."
+                    className="w-full bg-[#0a0f1d] border border-white/10 rounded-xl p-4 text-sm font-black text-white outline-none focus:border-blue-500"
                   />
                 </div>
               </div>
