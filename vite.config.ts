@@ -36,6 +36,23 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: "dist",
       sourcemap: false,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes("node_modules")) {
+              if (id.includes("react")) return "vendor-react";
+              if (id.includes("pdfmake") || id.includes("jszip")) return "vendor-docs";
+              if (id.includes("lucide-react")) return "vendor-ui";
+              return "vendor";
+            }
+            if (id.includes("CustomerPortal.tsx")) return "portal-customer";
+            if (id.includes("ContractorPortal.tsx")) return "portal-contractor";
+            if (id.includes("AccountantPortal.tsx")) return "portal-accountant";
+            if (id.includes("AdminPanel.tsx")) return "portal-admin";
+            return undefined;
+          },
+        },
+      },
     },
   };
 });

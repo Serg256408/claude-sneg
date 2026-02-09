@@ -543,7 +543,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, comp
 
     evidences.forEach((ev, index) => {
       const driver = ev.assignmentId ? driverLookup.get(ev.assignmentId) : driverLookup.get(ev.driverName);
-      const photos = ev.photos && ev.photos.length > 0 ? ev.photos : (ev.photo ? [{ type: 'other' as const }] : []);
+      const photos = ev.photos && ev.photos.length > 0 ? ev.photos : [];
       const photoSummary = photos.length
         ? photos.map(p => photoTypeLabels[p.type] || 'Фото').join(', ')
         : '—';
@@ -719,16 +719,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, comp
     };
     
     // Создаём текстовый отчёт (в реальном приложении - PDF)
-    const title =
-      type === 'act'
-        ? 'АКТ ВЫПОЛНЕННЫХ РАБОТ'
-        : type === 'invoice'
-        ? 'СЧЁТ НА ОПЛАТУ'
-        : type === 'contract'
-        ? 'ДОГОВОР НА ОКАЗАНИЕ УСЛУГ ПО ВЫВОЗУ СНЕГА'
-        : type === 'quote'
-        ? 'КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ'
-        : 'ПОЛНЫЙ ОТЧЁТ';
+    const title = type === 'act'
+      ? 'АКТ ВЫПОЛНЕННЫХ РАБОТ'
+      : 'КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ';
 
     const quoteLines = () => {
       const lines: string[] = [];
@@ -813,14 +806,7 @@ ${order.assetRequirements.map(req => {
 ИТОГО К ОПЛАТЕ: ${formatPrice(totals.grandTotal)}` }
 -----------------------------------------------------------
 
-${type === 'full' ? `
-в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
-                       РЕЕСТР РЕЙСОВ
-в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
-${confirmedEvidences.map((ev, i) => 
-  `${i + 1}. ${formatDateTime(ev.timestamp)} - ${ev.driverName} ${ev.confirmed ? 'Подтверждён' : 'На проверке'}`
-).join('\n')}
-` : ''}
+${''}
 
 в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
            Документ сформирован автоматически
@@ -851,9 +837,7 @@ ${confirmedEvidences.map((ev, i) =>
     try {
       const evidences = getConfirmedEvidences(order);
       const photos = evidences.flatMap((ev, evIndex) => {
-        const list = ev.photos && ev.photos.length > 0
-          ? ev.photos
-          : (ev.photo ? [{ url: ev.photo, type: 'other' as const, timestamp: ev.timestamp }] : []);
+        const list = ev.photos && ev.photos.length > 0 ? ev.photos : [];
         return list.map((photo, idx) => ({
           url: photo.url,
           type: photo.type,
@@ -986,7 +970,7 @@ ${confirmedEvidences.map((ev, i) =>
           { text: 'Исполнитель:', bold: true, margin: [0, 10, 0, 5] },
           { text: companyData.name, margin: [0, 0, 0, 2] },
           { text: `ИНН: ${companyData.inn}`, margin: [0, 0, 0, 2] },
-          { text: `Адрес: ${companyData.address}`, margin: [0, 0, 0, 10] },
+          { text: `Адрес: ${companyData.legalAddress}`, margin: [0, 0, 0, 10] },
 
           { text: 'Заказчик:', bold: true, margin: [0, 10, 0, 5] },
           { text: order.customer, margin: [0, 0, 0, 2] },
@@ -1006,10 +990,19 @@ ${confirmedEvidences.map((ev, i) =>
                 ],
                 ...(order.assetRequirements || []).map(req => {
                   const units = getUnitsForReq(req);
-                  const unitLabel = req.priceUnit === 'PER_HOUR' ? 'ч' : 'рейс';
-                  const lineTotal = (req.customerPrice || 0) * units * (req.quantity || 1);
+                  const unitLabel = req.priceUnit === PriceUnit.PER_HOUR
+                    ? 'ч'
+                    : req.priceUnit === PriceUnit.PER_SHIFT
+                      ? 'смен'
+                      : 'рейс';
+                  const lineTotal = (req.customerPrice || 0) * units;
+                  const assetLabel = req.type === AssetType.MINI_LOADER
+                    ? 'Мини-погрузчик'
+                    : isLoaderType(req.type)
+                      ? 'Погрузчик'
+                      : 'Самосвал';
                   return [
-                    { text: `${req.assetType} (${req.quantity || 1} ед.)` },
+                    { text: `${assetLabel} (${req.plannedUnits || 1} ед.)` },
                     { text: `${units} ${unitLabel}`, alignment: 'center' },
                     { text: formatPrice(req.customerPrice || 0), alignment: 'right' },
                     { text: formatPrice(lineTotal), alignment: 'right' }
@@ -1156,21 +1149,14 @@ ${confirmedEvidences.map((ev, i) =>
       // Копируем требования но очищаем назначенную технику и подрядчиков
       assetRequirements: order.assetRequirements.map(req => ({
         id: generateId(),
-        assetType: req.assetType,
         type: req.type,
-        quantity: req.quantity,
+        plannedUnits: req.plannedUnits,
         customerPrice: req.customerPrice,
         contractorPrice: req.contractorPrice,
         priceUnit: req.priceUnit,
-        trips: req.trips,
-        hours: req.hours,
         // Очищаем назначения - на новый заказ поедет другая техника
-        contractorId: undefined,
-        contractorName: undefined,
-        vehicleId: undefined,
-        vehiclePlate: undefined,
-        driverId: undefined,
-        driverName: undefined,
+        contractorId: '',
+        contractorName: '',
       })),
       plannedTrips: order.plannedTrips,
       scheduledTime: toLocalDateTimeInputValue(new Date(Date.now() + 3600000)),
@@ -1233,7 +1219,7 @@ ${confirmedEvidences.map((ev, i) =>
     const displayLabel = order.status === OrderStatus.SEARCHING_EQUIPMENT
       ? 'Назначение техники'
       : getOrderStatusLabel(order.status);
-    const styles: Record<OrderStatus, string> = {
+    const styles: Partial<Record<OrderStatus, string>> = {
       [OrderStatus.NEW_REQUEST]: 'bg-slate-600/20 text-slate-400 border-slate-500/20',
       [OrderStatus.AWAITING_CUSTOMER]: 'bg-blue-600/20 text-blue-400 border-blue-500/20 animate-pulse',
       [OrderStatus.SEARCHING_EQUIPMENT]: 'bg-teal-600/20 text-teal-400 border-teal-500/20',
@@ -1575,7 +1561,7 @@ ${confirmedEvidences.map((ev, i) =>
                             .flatMap(ev => {
                               const allPhotos = ev.photos && ev.photos.length > 0
                                 ? ev.photos
-                                : (ev.photo ? [{ url: ev.photo, type: 'other' as const, timestamp: ev.timestamp }] : []);
+                                : [];
                               return allPhotos.map((photo, idx) => ({
                                 key: `${ev.id}-${idx}`,
                                 url: photo.url,
@@ -2011,7 +1997,7 @@ ${confirmedEvidences.map((ev, i) =>
                             .flatMap(ev => {
                               const allPhotos = ev.photos && ev.photos.length > 0
                                 ? ev.photos
-                                : (ev.photo ? [{ url: ev.photo, type: 'other' as const, timestamp: ev.timestamp }] : []);
+                                : [];
                               return allPhotos.map((photo, idx) => ({
                                 key: `${ev.id}-${idx}`,
                                 url: photo.url,

@@ -38,6 +38,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
   embedded = false,
   hideCompletedAssignments = false
 }) => {
+  type EvidencePhoto = TripEvidence['photos'][number];
   const toast = useToast();
   const [selectedOrder, setSelectedOrder] = useState<{ order: Order; type: AssetType } | null>(null);
   const [activeTab, setActiveTab] = useState<'mine' | 'public' | 'company' | 'earnings'>('mine');
@@ -45,7 +46,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
   const [currentPosition, setCurrentPosition] = useState<GeoPosition | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [photoType, setPhotoType] = useState<'loading' | 'full_truck' | 'unloading' | 'ticket'>('loading');
-  const [capturedPhotos, setCapturedPhotos] = useState<{ type: string; url: string; timestamp: string }[]>([]);
+  const [capturedPhotos, setCapturedPhotos] = useState<EvidencePhoto[]>([]);
   const [showPhotoPreview, setShowPhotoPreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dateFrom, setDateFrom] = useState('');
@@ -407,7 +408,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
 
     const reader = new FileReader();
     reader.onloadend = () => {
-      const newPhoto = {
+      const newPhoto: EvidencePhoto = {
         type: photoType,
         url: reader.result as string,
         timestamp: new Date().toISOString()
@@ -1054,7 +1055,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                               <div key={ev.id} className="flex items-center gap-3 bg-white/5 p-3 rounded-xl border border-white/5">
                                 <div className="w-12 h-12 bg-black rounded-lg overflow-hidden shrink-0">
                                   <img 
-                                    src={ev.photos?.[0]?.url || ev.photo} 
+                                    src={ev.photos?.[0]?.url} 
                                     className="w-full h-full object-cover" 
                                     alt={`Рейс ${ev.tripNumber || driverEvidences.length - i}`}
                                   />
@@ -1236,9 +1237,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                         confirmColor: 'green',
                         onConfirm: () => {
                           if (selectedOrder?.type !== AssetType.TRUCK && loaderShiftStarted && !loaderEndTime) {
-                            const endTime = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-                            setInputEndTime(endTime);
-                            saveLoaderShiftTime('shiftEndTime', endTime);
+                            endLoaderShift();
                           }
                           if (onUpdateDriverAssignment && currentDriverAssignment) {
                             markAssignmentStatus('completed');
@@ -1246,8 +1245,6 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                             onFinishWork(activeSelectedOrder.id);
                           }
                           setSelectedOrder(null);
-                          setInputStartTime('');
-                          setInputEndTime('');
                           setConfirmModal(prev => ({ ...prev, isOpen: false }));
                         }
                       });

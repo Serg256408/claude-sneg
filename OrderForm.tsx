@@ -175,7 +175,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
           type: driver.assetType,
           contractorId: driver.contractorId,
           contractorName: driver.contractorName || 'Подрядчик',
-          plannedUnits: 1,
+          plannedUnits: baseReq?.plannedUnits || (isTruckType(driver.assetType) ? (prev.plannedTrips || 1) : 1),
           customerPrice: baseReq?.customerPrice || 0,
           contractorPrice: driver.assignedPrice || baseReq?.contractorPrice || 0,
           priceUnit,
@@ -237,7 +237,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
       action: `Смена подтверждена диспетчером (${driver.driverName})`,
       actionType: 'assignment',
       performedBy: currentUser,
-      performedByRole: 'manager'
+      performedByRole: 'dispatcher'
     };
 
     const updatedFormData = {
@@ -282,14 +282,14 @@ const OrderForm: React.FC<OrderFormProps> = ({
   const isPaymentConfirmed = !!formData.isPaid || isFullyPaid;
 
   // Логирование действий
-  const createActionLog = useCallback((action: string, actionType: ActionLog['actionType'], prevValue?: string, newValue?: string) => ({
+  const createActionLog = useCallback((action: string, actionType: ActionLog['actionType'], prevValue?: string, newValue?: string): ActionLog => ({
     id: generateId(),
     orderId: formData.id || '',
     timestamp: new Date().toISOString(),
     action,
     actionType,
     performedBy: currentUser,
-    performedByRole: 'manager',
+    performedByRole: 'dispatcher',
     previousValue: prevValue,
     newValue: newValue
   }), [currentUser, formData.id]);
@@ -427,7 +427,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
           type: bid.assetType,
           contractorId: bid.contractorId,
           contractorName: bid.contractorName || 'Подрядчик',
-          plannedUnits: 1,
+          plannedUnits: baseReq?.plannedUnits || (isTruckType(bid.assetType) ? (formData.plannedTrips || 1) : 1),
           customerPrice: baseReq?.customerPrice || 0,
           contractorPrice: bid.proposedPrice || baseReq?.contractorPrice || 0,
           priceUnit,
@@ -466,7 +466,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
         action: `Утверждён отклик от ${bid.driverName}`,
         actionType: 'assignment' as const,
         performedBy: currentUser,
-        performedByRole: 'manager' as const
+        performedByRole: 'dispatcher' as const
       }]
     };
 
@@ -492,7 +492,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
         action: `Отклонён отклик от ${bid.driverName}`,
         actionType: 'assignment' as const,
         performedBy: currentUser,
-        performedByRole: 'manager' as const
+        performedByRole: 'dispatcher' as const
       }]
     };
     
@@ -1647,7 +1647,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
                     {unconfirmedEvidences.map(ev => (
                       <div key={ev.id} className="relative bg-black/40 rounded-xl overflow-hidden border border-white/10 group">
                         <img
-                          src={ev.photos?.[0]?.url || ev.photo}
+                          src={ev.photos?.[0]?.url || ''}
                           className="w-full h-32 object-cover opacity-80 group-hover:opacity-100 transition-all"
                           alt={`Рейс #${ev.tripNumber}`}
                         />
@@ -1693,7 +1693,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
                     {confirmedEvidences.map(ev => (
                       <div key={ev.id} className="relative rounded-xl overflow-hidden border border-green-500/30">
                         <img
-                          src={ev.photos?.[0]?.url || ev.photo}
+                          src={ev.photos?.[0]?.url || ''}
                           className="w-full h-20 object-cover"
                           alt={`Рейс #${ev.tripNumber}`}
                         />

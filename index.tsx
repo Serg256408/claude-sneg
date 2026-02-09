@@ -4,6 +4,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import { ToastProvider } from './ToastContext';
 import { ToastContainer } from './ToastContainer';
+import { NotificationProvider } from './NotificationContext';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -13,10 +14,12 @@ if (!rootElement) {
 const root = ReactDOM.createRoot(rootElement);
 root.render(
   <React.StrictMode>
-    <ToastProvider>
-      <App />
-      <ToastContainer />
-    </ToastProvider>
+    <NotificationProvider>
+      <ToastProvider>
+        <App />
+        <ToastContainer />
+      </ToastProvider>
+    </NotificationProvider>
   </React.StrictMode>
 ); 
   

@@ -8,9 +8,11 @@ import ConfirmModal from './ConfirmModal';
 
 // Типы для Leaflet (карты)
 interface LeafletMap {
-  setView: (center: [number, number], zoom: number) => LeafletMap;
+  setView: (center: [number, number], zoom: number, options?: Record<string, unknown>) => LeafletMap;
   remove: () => void;
-  fitBounds: (bounds: [[number, number], [number, number]]) => LeafletMap;
+  fitBounds: (bounds: [[number, number], [number, number]], options?: Record<string, unknown>) => LeafletMap;
+  removeLayer: (layer: LeafletMarker) => LeafletMap;
+  invalidateSize: (options?: Record<string, unknown>) => LeafletMap;
 }
 
 interface LeafletMarker {
@@ -19,7 +21,8 @@ interface LeafletMarker {
   setIcon: (icon: LeafletIcon) => LeafletMarker;
   openPopup: () => LeafletMarker;
   closePopup: () => LeafletMarker;
-  bindPopup: (content: string) => LeafletMarker;
+  bindPopup: (content: string, options?: Record<string, unknown>) => LeafletMarker;
+  getLatLng: () => { lat: number; lng: number };
 }
 
 interface LeafletIcon {
@@ -69,7 +72,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
   onAcceptJob,
   onFinishWork,
   onUpdateDriverAssignment,
-  onRemoveAssignment
+  onRemoveAssignment,
 }) => {
   const toast = useToast();
   const [activeTab, setActiveTab] = useState<'available' | 'direct' | 'active' | 'earnings' | 'driver'>('available');
@@ -90,8 +93,14 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 
   // Автомобили текущего подрядчика
   const contractorVehicles = useMemo(() => {
-    return vehicles.filter(v => v.ownerCompanyId === currentContractorId || v.ownerType === 'contractor');
+    return vehicles.filter(v => v.ownerCompanyId === currentContractorId);
   }, [vehicles, currentContractorId]);
+
+  // Текущий подрядчик (нужен для формы автомобиля ниже)
+  const currentContractor = useMemo(() => {
+    return contractors.find(c => c.id === currentContractorId);
+  }, [contractors, currentContractorId]);
+
   const [chatModal, setChatModal] = useState<{ isOpen: boolean; order: Order | null; message: string }>({
     isOpen: false,
     order: null,
@@ -137,10 +146,6 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
     return lat >= 54 && lat <= 57 && lng >= 35 && lng <= 40;
   }, []);
 
-  // Текущий подрядчик
-  const currentContractor = useMemo(() => {
-    return contractors.find(c => c.id === currentContractorId);
-  }, [contractors, currentContractorId]);
   const contractorRating = currentContractor ? Number(currentContractor.rating) || 0 : 0;
 
   // Доступные заказы на бирже (зависят от флага биржи)
@@ -356,7 +361,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
       fromRole: 'contractor',
       fromName: currentContractor?.name || 'Подрядчик',
       fromId: currentContractorId,
-      toRole: 'manager',
+      toRole: 'dispatcher',
       toId: order.dispatcherId || order.managerId,
       text: chatModal.message.trim(),
       timestamp: new Date().toISOString(),
@@ -594,10 +599,10 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
       const totalLoaders = loaderReq.reduce((sum, r) => sum + (r.plannedUnits || 1), 0);
 
       // Количество рейсов (для самосвалов)
-      const plannedTrips = order.plannedTrips || truckReq.reduce((sum, r) => sum + (r.trips || 0), 0);
+      const plannedTrips = order.plannedTrips || truckReq.reduce((sum, r) => sum + (r.plannedUnits || 0), 0);
 
       // Количество смен (для погрузчиков) - берём из первого requirement
-      const loaderShifts = loaderReq.length > 0 ? (loaderReq[0].shifts || 1) : 1;
+      const loaderShifts = loaderReq.length > 0 ? loaderReq.reduce((sum, r) => sum + (r.plannedUnits || 1), 0) : 1;
 
       // Цена (берём максимальную из всех позиций)
       const maxTruckPrice = truckReq.length > 0 ? Math.max(...truckReq.map(r => r.contractorPrice || 0)) : 0;
@@ -1754,6 +1759,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
             />
           </div>
         )}
+
       </div>
 
       {chatModal.isOpen && chatOrder && (

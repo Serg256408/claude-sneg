@@ -3,9 +3,11 @@ import { Order, OrderStatus, AssetType, getOrderStatusLabel, normalizeOrderStatu
 
 // Типы для Leaflet (карты)
 interface LeafletMap {
-  setView: (center: [number, number], zoom: number) => LeafletMap;
+  setView: (center: [number, number], zoom: number, options?: Record<string, unknown>) => LeafletMap;
   remove: () => void;
-  fitBounds: (bounds: [[number, number], [number, number]]) => LeafletMap;
+  fitBounds: (bounds: [[number, number], [number, number]], options?: Record<string, unknown>) => LeafletMap;
+  removeLayer: (layer: LeafletMarker) => LeafletMap;
+  invalidateSize: (options?: Record<string, unknown>) => LeafletMap;
 }
 
 interface LeafletMarker {
@@ -14,7 +16,8 @@ interface LeafletMarker {
   setIcon: (icon: LeafletIcon) => LeafletMarker;
   openPopup: () => LeafletMarker;
   closePopup: () => LeafletMarker;
-  bindPopup: (content: string) => LeafletMarker;
+  bindPopup: (content: string, options?: Record<string, unknown>) => LeafletMarker;
+  getLatLng: () => { lat: number; lng: number };
 }
 
 interface LeafletIcon {
@@ -242,6 +245,7 @@ const MapDashboard: React.FC<MapDashboardProps> = ({
         .addTo(mapInstanceRef.current)
         .bindPopup(`
           <div style="min-width: 280px; font-family: system-ui, sans-serif;">
+            ${order.managerName ? `<div style="font-size: 10px; font-weight: 700; color: #6366f1; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">👤 Менеджер: ${order.managerName}</div>` : ''}
             <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
               <div>
                 <div style="font-weight: 800; font-size: 15px; color: #1e293b;">${order.customer}</div>
@@ -474,6 +478,9 @@ const MapDashboard: React.FC<MapDashboardProps> = ({
                     </div>
 
                     <div className="flex-1 min-w-0">
+                      {order.managerName && (
+                        <div className="text-[9px] font-bold text-indigo-500 uppercase tracking-wider mb-0.5">{order.managerName}</div>
+                      )}
                       <div className="text-[10px] font-bold text-blue-600 uppercase">{order.customer}</div>
                       <div className="text-sm font-bold text-slate-800 truncate">{order.address}</div>
 

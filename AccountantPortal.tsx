@@ -24,6 +24,9 @@ import {
   formatPrice,
   formatDateTime,
   AssetRequirement,
+  AssetType,
+  PriceUnit,
+  isLoaderType,
   getUnitsForRequirement,
 } from './types';
 
@@ -237,10 +240,19 @@ export default function AccountantPortal({
                 ],
                 ...(order.assetRequirements || []).map(req => {
                   const units = getUnitsForReq(req);
-                  const unitLabel = req.priceUnit === 'PER_HOUR' ? 'ч' : 'рейс';
-                  const lineTotal = (req.customerPrice || 0) * units * (req.quantity || 1);
+                  const unitLabel = req.priceUnit === PriceUnit.PER_HOUR
+                    ? 'ч'
+                    : req.priceUnit === PriceUnit.PER_SHIFT
+                      ? 'смен'
+                      : 'рейс';
+                  const lineTotal = (req.customerPrice || 0) * units;
+                  const assetLabel = req.type === AssetType.MINI_LOADER
+                    ? 'Мини-погрузчик'
+                    : isLoaderType(req.type)
+                      ? 'Погрузчик'
+                      : 'Самосвал';
                   return [
-                    { text: `${req.assetType} (${req.quantity || 1} ед.)` },
+                    { text: `${assetLabel} (${req.plannedUnits || 1} ед.)` },
                     { text: `${units} ${unitLabel}`, alignment: 'center' },
                     { text: formatPrice(req.customerPrice || 0), alignment: 'right' },
                     { text: formatPrice(lineTotal), alignment: 'right' }

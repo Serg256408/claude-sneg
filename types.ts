@@ -1037,16 +1037,24 @@ export interface Earnings {
 // ============================================
 // СООБЩЕНИЯ/ЧАТ
 // ============================================
+export type MessageRole = 'customer' | 'dispatcher' | 'contractor' | 'driver' | 'accountant' | 'system';
+export type LegacyMessageRole = MessageRole | 'manager';
+
+export function normalizeMessageRole(role?: LegacyMessageRole): MessageRole | undefined {
+  if (!role) return undefined;
+  return role === 'manager' ? 'dispatcher' : role;
+}
+
 export interface Message {
   id: string;
   orderId: string;
   
   // Участники
-  fromRole: 'customer' | 'manager' | 'contractor' | 'driver' | 'accountant' | 'system';
+  fromRole: LegacyMessageRole;
   fromName: string;
   fromId?: string;
   
-  toRole?: 'customer' | 'manager' | 'contractor' | 'driver' | 'accountant';
+  toRole?: Exclude<LegacyMessageRole, 'system'>;
   toId?: string;
   
   // Контент
@@ -1070,7 +1078,7 @@ export interface MessageTemplate {
   id: string;
   name: string;
   text: string;
-  forRoles: ('manager' | 'contractor' | 'driver')[];
+  forRoles: ('dispatcher' | 'manager' | 'contractor' | 'driver')[];
 }
 
 // ============================================
@@ -1085,7 +1093,7 @@ export interface ActionLog {
   actionType: 'status_change' | 'price_update' | 'assignment' | 'trip_confirmed' | 'message' | 'document' | 'other';
   
   performedBy: string; // Кто сделал
-  performedByRole: 'customer' | 'manager' | 'contractor' | 'driver' | 'system';
+  performedByRole: LegacyMessageRole;
   
   previousValue?: string;
   newValue?: string;
@@ -1811,7 +1819,8 @@ const getCustomerUnits = (order: Order, req: AssetRequirement, options?: { mode?
   };
 
   if (isTruckType(req.type) && req.priceUnit === PriceUnit.PER_TRIP) {
-    return selectByMode(tripCounts.actual, tripCounts.confirmed, tripCounts.planned);
+    const truckPlanned = plannedUnits > 0 ? plannedUnits : tripCounts.planned;
+    return selectByMode(tripCounts.actual, tripCounts.confirmed, truckPlanned);
   }
   if (isLoaderType(req.type)) {
     if (req.priceUnit === PriceUnit.PER_SHIFT) {

@@ -1,18 +1,18 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from './ToastContext';
-import { ClipboardList, Truck, Clock, CheckCircle, AlertTriangle } from 'lucide-react';
+import { useNotifications } from './NotificationContext';
+import { NotificationCenter } from './NotificationCenter';
+import { KanbanBoard } from './KanbanBoard';
+import { OrderCalendar } from './OrderCalendar';
+import { useKeyboardShortcuts, ShortcutHelpModal } from './KeyboardShortcuts';
+import { ClipboardList, Truck, Clock, CheckCircle, AlertTriangle, LayoutGrid, List, Calendar, Keyboard } from 'lucide-react';
 import { StatCard } from './StatCard';
-import ContractorPortal from './ContractorPortal';
-import CustomerPortal from './CustomerPortal';
 import CustomerFormDispatcher from './CustomerForm_Dispatcher';
 import ContractorForm from './ContractorForm';
 import MapDashboard from './MapDashboard';
 import OrderForm from './OrderForm';
 import SalesManagerPortal from './SalesManagerPortal';
 import EstimatorPortal from './EstimatorPortal';
-import AccountantPortal from './AccountantPortal';
-import AdminPanel from './AdminPanel';
-import ActivityLogPanel from './ActivityLogPanel';
 import {
   AssetType,
   Bid,
@@ -62,6 +62,7 @@ import {
   ActivityLogAction,
   ACTIVITY_ACTION_LABELS,
   ACTIVITY_ENTITY_LABELS,
+  normalizeMessageRole,
 } from './types';
 
 // Расширенные роли
@@ -94,6 +95,17 @@ const LS_KEYS = {
   vehicles: 'snowforce_vehicles_v1',
   activityLog: 'snowforce_activity_log_v1',
 } as const;
+
+const CustomerPortal = lazy(() => import('./CustomerPortal'));
+const ContractorPortal = lazy(() => import('./ContractorPortal'));
+const AccountantPortal = lazy(() => import('./AccountantPortal'));
+const AdminPanel = lazy(() => import('./AdminPanel'));
+
+const LazyPortalFallback = () => (
+  <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm font-bold text-slate-500">
+    Загрузка раздела...
+  </div>
+);
 
 function safeJsonParse<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback;
@@ -327,18 +339,48 @@ function normalizeContractor(raw: Partial<Contractor>): Contractor {
 
 const toArray = <T,>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
 
+const normalizeMessageAttachments = (attachments: unknown): NonNullable<Message['attachments']> =>
+  toArray<{ type?: unknown; url?: unknown; name?: unknown }>(attachments)
+    .filter(att => typeof att?.type === 'string' && typeof att?.url === 'string')
+    .map(att => ({
+      type: att.type as 'image' | 'document' | 'location',
+      url: att.url as string,
+      name: typeof att.name === 'string' ? att.name : undefined,
+    }));
+
+const normalizeClosingAttachments = (attachments: unknown): NonNullable<ClosingDocs['attachments']> =>
+  toArray<{ name?: unknown; url?: unknown }>(attachments)
+    .filter(att => typeof att?.name === 'string' && typeof att?.url === 'string')
+    .map(att => ({
+      name: att.name as string,
+      url: att.url as string,
+    }));
+
 function normalizeOrderDates(order: Order): Order {
   const createdAt = order.createdAt || new Date().toISOString();
   const updatedAt = order.updatedAt || createdAt;
   const scheduledTime = order.scheduledTime || toLocalDateTimeInputValue(new Date(createdAt));
-  const messages = toArray<Message>(order.messages).map(msg => ({
-    ...msg,
-    attachments: toArray(msg.attachments)
-  }));
+  const messages = toArray<Partial<Message>>(order.messages).map(msg => {
+    const fromRole = normalizeMessageRole(msg.fromRole);
+    const toRoleRaw = normalizeMessageRole(msg.toRole);
+    const toRole = toRoleRaw && toRoleRaw !== 'system' ? toRoleRaw : undefined;
+    return {
+      ...msg,
+      id: msg.id || generateId(),
+      orderId: msg.orderId || order.id,
+      fromRole: fromRole || 'system',
+      fromName: msg.fromName || 'Система',
+      toRole,
+      text: msg.text || '',
+      timestamp: msg.timestamp || createdAt,
+      isRead: !!msg.isRead,
+      attachments: normalizeMessageAttachments(msg.attachments),
+    } as Message;
+  });
   const closingDocs = order.closingDocs && typeof order.closingDocs === 'object'
     ? {
         ...order.closingDocs,
-        attachments: toArray(order.closingDocs.attachments)
+        attachments: normalizeClosingAttachments(order.closingDocs.attachments)
       }
     : undefined;
 
@@ -498,6 +540,8 @@ function seedOrders(customers: Customer[]): Order[] {
       scheduledTime: nowLocal,
       status: OrderStatus.NEW_REQUEST,
       managerName: DEFAULT_MANAGERS[0],
+      dispatcherName: DEFAULT_MANAGERS[0],
+      dispatcherId: 'dispatcher-1',
       createdAt: now,
       updatedAt: now,
       actionLog: [],
@@ -544,6 +588,8 @@ function seedOrders(customers: Customer[]): Order[] {
       scheduledTime: nowLocal,
       status: OrderStatus.SEARCHING_EQUIPMENT,
       managerName: DEFAULT_MANAGERS[1],
+      dispatcherName: DEFAULT_MANAGERS[0],
+      dispatcherId: 'dispatcher-1',
       createdAt: now,
       updatedAt: now,
       actionLog: [],
@@ -602,6 +648,8 @@ function seedOrders(customers: Customer[]): Order[] {
       scheduledTime: nowLocal,
       status: OrderStatus.NEW_REQUEST,
       managerName: DEFAULT_MANAGERS[2],
+      dispatcherName: DEFAULT_MANAGERS[0],
+      dispatcherId: 'dispatcher-1',
       createdAt: now,
       updatedAt: now,
       actionLog: [],
@@ -734,8 +782,6 @@ export default function App() {
       return [];
     }
   });
-  const [showActivityLog, setShowActivityLog] = useState(false);
-
   const [view, setView] = useState<'dashboard' | 'order-form' | 'customer-form' | 'contractor-form' | 'customers' | 'contractors'>('dashboard');
   const [editingOrder, setEditingOrder] = useState<Order | undefined>(undefined);
   const [editingCustomer, setEditingCustomer] = useState<Customer | undefined>(undefined);
@@ -754,6 +800,10 @@ export default function App() {
   const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
   const [customerDirectorySearch, setCustomerDirectorySearch] = useState('');
   const [contractorDirectorySearch, setContractorDirectorySearch] = useState('');
+  const [dashboardViewMode, setDashboardViewMode] = useState<'table' | 'kanban' | 'calendar'>('table');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const { addNotification } = useNotifications();
 
   const [currentContractorId, setCurrentContractorId] = useState<string>(() => localStorage.getItem(LS_KEYS.contractorId) || contractors[0]?.id || '');
   // Очистка переполненного хранилища при старте
@@ -958,6 +1008,30 @@ export default function App() {
     return { active: active.length, inProgress: inProgress.length, awaiting: awaitingAssignment.length, completedToday: completedToday.length };
   }, [orders]);
 
+  // Keyboard shortcuts
+  const { showHelp: showShortcutHelp, setShowHelp: setShowShortcutHelp } = useKeyboardShortcuts({
+    onNewOrder: () => {
+      if (role === 'dispatcher' && view === 'dashboard') {
+        setEditingOrder(undefined);
+        setView('order-form');
+      }
+    },
+    onFocusSearch: () => {
+      if (role === 'dispatcher' && view === 'dashboard') {
+        searchInputRef.current?.focus();
+      }
+    },
+    onEscape: () => {
+      if (role === 'dispatcher') {
+        if (view === 'order-form' || view === 'customer-form' || view === 'contractor-form' || view === 'customers' || view === 'contractors') {
+          setView('dashboard');
+          setEditingOrder(undefined);
+        }
+      }
+    },
+    enabled: role === 'dispatcher',
+  });
+
   const filteredCustomers = useMemo(() => {
     const term = customerDirectorySearch.trim().toLowerCase();
     if (!term) return customers;
@@ -1022,9 +1096,13 @@ export default function App() {
         startedAt: partial.startedAt,
         completedAt: partial.completedAt,
         status: (partial.status as OrderStatus) || OrderStatus.NEW_REQUEST,
+        executionMode: partial.executionMode || ExecutionMode.MARKETPLACE,
+        serviceType: partial.serviceType || ServiceType.SNOW,
         isFrozen: partial.isFrozen,
         managerName: (partial.managerName as ManagerName) || currentManager,
         managerId: partial.managerId,
+        dispatcherName: partial.dispatcherName || (role === 'dispatcher' ? currentManager : undefined),
+        dispatcherId: partial.dispatcherId || (role === 'dispatcher' ? 'dispatcher-1' : undefined),
         messages: partial.messages || [],
         unreadMessages: partial.unreadMessages || 0,
         actionLog: partial.actionLog || [],
@@ -1035,6 +1113,15 @@ export default function App() {
       };
       setOrders(prev => [order, ...prev]);
       toast.success(`Заказ ${order.orderNumber || ''} создан`);
+
+      // Уведомление
+      addNotification({
+        type: 'order_created',
+        title: 'Новый заказ',
+        message: `${order.orderNumber} — ${order.customer} (${order.address})`,
+        role: 'dispatcher',
+        orderId: order.id,
+      });
 
       // Логируем создание заказа
       addActivityLog({
@@ -1059,7 +1146,21 @@ export default function App() {
   const updateOrder = useCallback((orderId: string, updates: Partial<Order>) => {
     setOrders(prev => {
       const oldOrder = prev.find(o => o.id === orderId);
+      // Автоматически проставляем диспетчера при первом редактировании
+      if (role === 'dispatcher' && oldOrder && !oldOrder.dispatcherName && !updates.dispatcherName) {
+        updates = { ...updates, dispatcherName: currentManager, dispatcherId: 'dispatcher-1' };
+      }
       const newOrders = prev.map(o => (o.id === orderId ? ({ ...o, ...updates, updatedAt: new Date().toISOString() } as Order) : o));
+
+      // Уведомление при смене статуса
+      if (oldOrder && updates.status && updates.status !== oldOrder.status) {
+        addNotification({
+          type: 'status_changed',
+          title: 'Статус изменён',
+          message: `${oldOrder.orderNumber || oldOrder.customer}: ${oldOrder.status} → ${updates.status}`,
+          orderId,
+        });
+      }
 
       // Логируем изменение заказа (только для значимых изменений)
       if (oldOrder && (updates.status || updates.isPaid !== undefined || updates.totalCustomerPrice !== undefined)) {
@@ -1088,7 +1189,7 @@ export default function App() {
 
       return newOrders;
     });
-  }, [addActivityLog, role]);
+  }, [addActivityLog, role, currentManager]);
 
   const onSubmitOrderForm = useCallback(
     (data: Partial<Order>, keepOpen?: boolean) => {
@@ -1343,7 +1444,7 @@ export default function App() {
       actualTrips: 0,
       evidences: [],
       isPaid: false,
-      scheduledTime: nowLocal,
+      scheduledTime: toLocalDateTimeInputValue(),
       status: OrderStatus.NEW_REQUEST,
       managerName: lead.assignedManagerName || currentManager,
       managerId: lead.assignedManagerId,
@@ -1453,6 +1554,10 @@ export default function App() {
 
   const updateVehicle = useCallback((vehicleId: string, updates: Partial<Vehicle>) => {
     setVehicles(prev => prev.map(v => v.id === vehicleId ? { ...v, ...updates } : v));
+  }, []);
+
+  const deleteVehicle = useCallback((vehicleId: string) => {
+    setVehicles(prev => prev.filter(v => v.id !== vehicleId));
   }, []);
 
   // Обновление данных назначения водителя (например, время смены погрузчика)
@@ -1616,7 +1721,7 @@ export default function App() {
     return null;
   }, [contractors, currentContractorId, currentManager, resetOrdersAndTrips, role, view]);
 
-  const buildTag = `BUILD: ${new Date().toLocaleString()}`;
+  const buildTag = `BUILD: ${import.meta.env.VITE_BUILD_ID || 'local'}`;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -1646,9 +1751,23 @@ export default function App() {
             </div>
           </div>
 
-          {headerRight}
+          <div className="flex items-center gap-2">
+            <NotificationCenter currentRole={role} />
+            {role === 'dispatcher' && (
+              <button
+                onClick={() => setShowShortcutHelp(true)}
+                className="p-2 rounded-xl hover:bg-slate-100 transition-colors hidden lg:flex"
+                title="Горячие клавиши (?)"
+              >
+                <Keyboard size={20} className="text-slate-400" />
+              </button>
+            )}
+            {headerRight}
+          </div>
         </div>
       </div>
+
+      <ShortcutHelpModal isOpen={showShortcutHelp} onClose={() => setShowShortcutHelp(false)} />
 
       <div className="max-w-7xl mx-auto px-4 py-8">
         {role === 'dispatcher' && view === 'dashboard' && (
@@ -1662,7 +1781,7 @@ export default function App() {
             </div>
 
             <MapDashboard
-              orders={filteredOrders}
+              orders={orders}
               onSelectOrder={o => setSelectedMapOrder(o)}
             />
 
@@ -1685,11 +1804,61 @@ export default function App() {
                 )}
               </div>
 
+              {/* View mode switcher */}
+              <div className="flex items-center gap-2 mb-4">
+                <div className="flex items-center bg-slate-100 rounded-xl p-1">
+                  <button
+                    onClick={() => setDashboardViewMode('table')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${dashboardViewMode === 'table' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                    <List size={14} /> Таблица
+                  </button>
+                  <button
+                    onClick={() => setDashboardViewMode('kanban')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${dashboardViewMode === 'kanban' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                    <LayoutGrid size={14} /> Канбан
+                  </button>
+                  <button
+                    onClick={() => setDashboardViewMode('calendar')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${dashboardViewMode === 'calendar' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                    <Calendar size={14} /> Календарь
+                  </button>
+                </div>
+              </div>
+
+              {dashboardViewMode === 'kanban' && (
+                <KanbanBoard
+                  orders={managerOrders}
+                  onSelectOrder={o => {
+                    setEditingOrder(o);
+                    setView('order-form');
+                  }}
+                />
+              )}
+
+              {dashboardViewMode === 'calendar' && (
+                <OrderCalendar
+                  orders={managerOrders}
+                  onSelectOrder={o => {
+                    setEditingOrder(o);
+                    setView('order-form');
+                  }}
+                  onCreateOrder={() => {
+                    setEditingOrder(undefined);
+                    setView('order-form');
+                  }}
+                />
+              )}
+
+              {dashboardViewMode === 'table' && <>
               <div className="mb-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="flex flex-wrap items-end gap-3">
                   <div className="flex min-w-[220px] flex-1 flex-col gap-1">
                     <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Поиск</span>
                     <input
+                      ref={searchInputRef}
                       value={orderSearch}
                       onChange={e => setOrderSearch(e.target.value)}
                       placeholder="Номер, клиент, адрес"
@@ -1863,6 +2032,7 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
+              </>}
             </div>
           </div>
         )}
@@ -2095,6 +2265,10 @@ export default function App() {
         {role === 'dispatcher' && view === 'contractor-form' && (
           <ContractorForm
             initialData={editingContractor}
+            vehicles={vehicles}
+            onAddVehicle={addVehicle}
+            onUpdateVehicle={updateVehicle}
+            onDeleteVehicle={deleteVehicle}
             onSubmit={data => {
               addContractor(data);
               setEditingContractor(undefined);
@@ -2107,10 +2281,21 @@ export default function App() {
           />
         )}
 
-        {role === 'customer' && <CustomerPortal orders={orders} customers={customers} companySettings={companySettings} onAddOrder={addOrder} onUpdateOrder={updateOrder} />}
+        {role === 'customer' && (
+          <Suspense fallback={<LazyPortalFallback />}>
+            <CustomerPortal
+              orders={orders}
+              customers={customers}
+              companySettings={companySettings}
+              onAddOrder={addOrder}
+              onUpdateOrder={updateOrder}
+            />
+          </Suspense>
+        )}
 
         {role === 'contractor' && (
-          <ContractorPortal
+          <Suspense fallback={<LazyPortalFallback />}>
+            <ContractorPortal
             orders={orders}
             contractors={contractors}
             currentContractorId={currentContractorId || contractors[0]?.id || ''}
@@ -2125,7 +2310,8 @@ export default function App() {
             onUpdateDriverAssignment={updateDriverAssignment}
             onRemoveAssignment={removeDriverAssignment}
             onUpdateOrder={updateOrder}
-          />
+            />
+          </Suspense>
         )}
 
         {/* Новые порталы */}
@@ -2156,7 +2342,8 @@ export default function App() {
         )}
 
         {role === 'accountant' && (
-          <AccountantPortal
+          <Suspense fallback={<LazyPortalFallback />}>
+            <AccountantPortal
             orders={orders}
             onUpdateOrder={updateOrder}
             onCreateInvoice={createInvoice}
@@ -2165,32 +2352,35 @@ export default function App() {
             onCreateClosingDocs={createClosingDocs}
             currentUserId="accountant-1"
             currentUserName="Бухгалтер"
-          />
+            />
+          </Suspense>
         )}
 
         {role === 'admin' && (
-          <AdminPanel
-            users={users}
-            companies={companies}
-            priceBook={priceBook}
-            commissionSettings={commissionSettings}
-            companySettings={companySettings}
-            vehicles={vehicles}
-            onAddUser={addUser}
-            onUpdateUser={updateUser}
-            onAddCompany={addCompany}
-            onUpdateCompany={updateCompany}
-            onAddPriceItem={addPriceItem}
-            onUpdatePriceItem={updatePriceItem}
-            onDeletePriceItem={deletePriceItem}
-            onUpdateCommissionSettings={setCommissionSettings}
-            onUpdateCompanySettings={setCompanySettings}
-            onAddVehicle={addVehicle}
-            onUpdateVehicle={updateVehicle}
-            activityLog={activityLog}
-            onRevertActivity={revertActivity}
-            onClearActivityLog={() => setActivityLog([])}
-          />
+          <Suspense fallback={<LazyPortalFallback />}>
+            <AdminPanel
+              users={users}
+              companies={companies}
+              priceBook={priceBook}
+              commissionSettings={commissionSettings}
+              companySettings={companySettings}
+              vehicles={vehicles}
+              onAddUser={addUser}
+              onUpdateUser={updateUser}
+              onAddCompany={addCompany}
+              onUpdateCompany={updateCompany}
+              onAddPriceItem={addPriceItem}
+              onUpdatePriceItem={updatePriceItem}
+              onDeletePriceItem={deletePriceItem}
+              onUpdateCommissionSettings={setCommissionSettings}
+              onUpdateCompanySettings={setCompanySettings}
+              onAddVehicle={addVehicle}
+              onUpdateVehicle={updateVehicle}
+              activityLog={activityLog}
+              onRevertActivity={revertActivity}
+              onClearActivityLog={() => setActivityLog([])}
+            />
+          </Suspense>
         )}
       </div>
     </div>

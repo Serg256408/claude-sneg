@@ -127,7 +127,7 @@ export default function AdminPanel({
     if (!searchQuery) return companies;
     const q = searchQuery.toLowerCase();
     return companies.filter(c =>
-      [c.name, c.inn, c.address, c.email, c.phone].filter(Boolean).join(' ').toLowerCase().includes(q)
+      [c.name, c.inn, c.legalAddress, c.actualAddress, c.email, c.phone].filter(Boolean).join(' ').toLowerCase().includes(q)
     );
   }, [companies, searchQuery]);
 
@@ -135,7 +135,7 @@ export default function AdminPanel({
     if (!searchQuery) return vehicles;
     const q = searchQuery.toLowerCase();
     return vehicles.filter(v =>
-      [v.model, v.plateNumber, v.ownerName].filter(Boolean).join(' ').toLowerCase().includes(q)
+      [v.model, v.plateNumber, v.ownerCompanyName].filter(Boolean).join(' ').toLowerCase().includes(q)
     );
   }, [vehicles, searchQuery]);
 

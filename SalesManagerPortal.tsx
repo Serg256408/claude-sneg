@@ -1,5 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useToast } from './ToastContext';
+import { SalesFunnel } from './SalesFunnel';
+import ManagerFinanceDashboard from './ManagerFinanceDashboard';
 import {
   Lead,
   LeadStatus,
@@ -45,7 +47,7 @@ export default function SalesManagerPortal({
   onUpdateOrder,
 }: SalesManagerPortalProps) {
   const toast = useToast();
-  const [activeTab, setActiveTab] = useState<'leads' | 'my_orders' | 'new_lead'>('leads');
+  const [activeTab, setActiveTab] = useState<'leads' | 'my_orders' | 'finance' | 'new_lead'>('leads');
   const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all'>('all');
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [showLeadForm, setShowLeadForm] = useState(false);
@@ -164,31 +166,45 @@ export default function SalesManagerPortal({
 
   return (
     <div className="space-y-6">
-      {/* Статистика */}
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-        <div className="bg-blue-50 rounded-2xl p-4 text-center">
-          <div className="text-3xl font-black text-blue-600">{stats.newLeads}</div>
-          <div className="text-xs font-bold text-blue-800 uppercase">Новые</div>
-        </div>
-        <div className="bg-yellow-50 rounded-2xl p-4 text-center">
-          <div className="text-3xl font-black text-yellow-600">{stats.inProgress}</div>
-          <div className="text-xs font-bold text-yellow-800 uppercase">В работе</div>
-        </div>
-        <div className="bg-indigo-50 rounded-2xl p-4 text-center">
-          <div className="text-3xl font-black text-indigo-600">{stats.offersSent}</div>
-          <div className="text-xs font-bold text-indigo-800 uppercase">КП отправлено</div>
-        </div>
-        <div className="bg-green-50 rounded-2xl p-4 text-center">
-          <div className="text-3xl font-black text-green-600">{stats.won}</div>
-          <div className="text-xs font-bold text-green-800 uppercase">Выиграно</div>
-        </div>
-        <div className="bg-red-50 rounded-2xl p-4 text-center">
-          <div className="text-3xl font-black text-red-600">{stats.lost}</div>
-          <div className="text-xs font-bold text-red-800 uppercase">Проиграно</div>
-        </div>
-        <div className="bg-emerald-50 rounded-2xl p-4 text-center">
-          <div className="text-2xl font-black text-emerald-600">{formatPrice(stats.totalRevenue)}</div>
-          <div className="text-xs font-bold text-emerald-800 uppercase">Выручка</div>
+      {/* Статистика + Воронка */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <SalesFunnel
+          leads={leads.filter(l => !l.assignedManagerId || l.assignedManagerId === currentManagerId)}
+          onFilterByStatus={(s) => {
+            if (s) {
+              setStatusFilter(s);
+              setActiveTab('leads');
+            } else {
+              setStatusFilter('all');
+            }
+          }}
+          activeFilter={statusFilter === 'all' ? null : statusFilter}
+        />
+        <div className="grid grid-cols-2 gap-3 content-start">
+          <div className="bg-blue-50 rounded-2xl p-4 text-center">
+            <div className="text-3xl font-black text-blue-600">{stats.newLeads}</div>
+            <div className="text-xs font-bold text-blue-800 uppercase">Новые</div>
+          </div>
+          <div className="bg-yellow-50 rounded-2xl p-4 text-center">
+            <div className="text-3xl font-black text-yellow-600">{stats.inProgress}</div>
+            <div className="text-xs font-bold text-yellow-800 uppercase">В работе</div>
+          </div>
+          <div className="bg-indigo-50 rounded-2xl p-4 text-center">
+            <div className="text-3xl font-black text-indigo-600">{stats.offersSent}</div>
+            <div className="text-xs font-bold text-indigo-800 uppercase">КП отправлено</div>
+          </div>
+          <div className="bg-green-50 rounded-2xl p-4 text-center">
+            <div className="text-3xl font-black text-green-600">{stats.won}</div>
+            <div className="text-xs font-bold text-green-800 uppercase">Выиграно</div>
+          </div>
+          <div className="bg-red-50 rounded-2xl p-4 text-center">
+            <div className="text-3xl font-black text-red-600">{stats.lost}</div>
+            <div className="text-xs font-bold text-red-800 uppercase">Проиграно</div>
+          </div>
+          <div className="bg-emerald-50 rounded-2xl p-4 text-center">
+            <div className="text-2xl font-black text-emerald-600">{formatPrice(stats.totalRevenue)}</div>
+            <div className="text-xs font-bold text-emerald-800 uppercase">Выручка</div>
+          </div>
         </div>
       </div>
 
@@ -205,6 +221,12 @@ export default function SalesManagerPortal({
           onClick={() => setActiveTab('my_orders')}
         >
           Мои заказы ({myOrders.length})
+        </button>
+        <button
+          className={`px-4 py-2 rounded-xl text-sm font-bold ${activeTab === 'finance' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200'}`}
+          onClick={() => setActiveTab('finance')}
+        >
+          Финансы
         </button>
         <button
           className="ml-auto px-4 py-2 rounded-xl text-sm font-bold bg-blue-600 text-white"
@@ -321,6 +343,16 @@ export default function SalesManagerPortal({
             </table>
           </div>
         </div>
+      )}
+
+      {/* Финансовый дашборд */}
+      {activeTab === 'finance' && (
+        <ManagerFinanceDashboard
+          orders={myOrders}
+          contractors={contractors}
+          currentManagerId={currentManagerId}
+          currentManagerName={currentManagerName}
+        />
       )}
 
       {/* Модалка детали лида */}

@@ -1,16 +1,21 @@
 
 import React, { useState } from 'react';
-import { Contractor, PaymentType, MOSCOW_DISTRICTS, generateId } from './types';
+import { Contractor, Vehicle, AssetType, PaymentType, MOSCOW_DISTRICTS, generateId } from './types';
+import { Plus, Trash2, Car } from 'lucide-react';
 
 interface ContractorFormProps {
   initialData?: Contractor;
   onSubmit: (data: Contractor) => void;
   onCancel: () => void;
+  vehicles?: Vehicle[];
+  onAddVehicle?: (vehicle: Vehicle) => void;
+  onUpdateVehicle?: (vehicleId: string, updates: Partial<Vehicle>) => void;
+  onDeleteVehicle?: (vehicleId: string) => void;
 }
 
 const COMMON_EQUIPMENT = ["Погрузчик", "Самосвал 20м3", "Самосвал 15м3", "Трактор JCB", "Экскаватор"];
 
-const ContractorForm: React.FC<ContractorFormProps> = ({ initialData, onSubmit, onCancel }) => {
+const ContractorForm: React.FC<ContractorFormProps> = ({ initialData, onSubmit, onCancel, vehicles = [], onAddVehicle, onUpdateVehicle, onDeleteVehicle }) => {
   const [formData, setFormData] = useState<Contractor>(initialData || {
     id: generateId(),
     name: '',
@@ -28,6 +33,18 @@ const ContractorForm: React.FC<ContractorFormProps> = ({ initialData, onSubmit, 
   });
 
   const [newEquipment, setNewEquipment] = useState('');
+
+  // Автомобили этого подрядчика
+  const contractorVehicles = vehicles.filter(v => v.ownerCompanyId === formData.id);
+
+  // Форма нового авто
+  const [newVehicle, setNewVehicle] = useState({
+    plateNumber: '',
+    brand: '',
+    type: AssetType.TRUCK as AssetType,
+    capacityM3: '',
+  });
+  const [showVehicleForm, setShowVehicleForm] = useState(false);
 
   const addEquipment = (item?: string) => {
     const value = (item || newEquipment).trim();
@@ -48,6 +65,26 @@ const ContractorForm: React.FC<ContractorFormProps> = ({ initialData, onSubmit, 
         ? prev.districts.filter(d => d !== district)
         : [...prev.districts, district]
     }));
+  };
+
+  const handleAddVehicle = () => {
+    if (!newVehicle.plateNumber.trim()) return;
+    const vehicle: Vehicle = {
+      id: generateId(),
+      ownerCompanyId: formData.id,
+      ownerCompanyName: formData.name,
+      ownerType: 'contractor',
+      type: newVehicle.type,
+      plateNumber: newVehicle.plateNumber.trim().toUpperCase(),
+      brand: newVehicle.brand.trim() || undefined,
+      capacityM3: newVehicle.capacityM3 ? Number(newVehicle.capacityM3) : undefined,
+      gpsEnabled: false,
+      status: 'available',
+      createdAt: new Date().toISOString(),
+    };
+    onAddVehicle?.(vehicle);
+    setNewVehicle({ plateNumber: '', brand: '', type: AssetType.TRUCK, capacityM3: '' });
+    setShowVehicleForm(false);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -111,9 +148,127 @@ const ContractorForm: React.FC<ContractorFormProps> = ({ initialData, onSubmit, 
           </div>
         </div>
 
+        {/* === АВТОМОБИЛИ === */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">
+              <Car size={12} className="inline mr-1" />
+              Автомобили ({contractorVehicles.length})
+            </label>
+            <button
+              type="button"
+              onClick={() => setShowVehicleForm(!showVehicleForm)}
+              className="flex items-center gap-1 text-[10px] font-black uppercase text-blue-600 hover:text-blue-800 transition-colors"
+            >
+              <Plus size={12} /> Добавить авто
+            </button>
+          </div>
+
+          {/* Форма добавления нового авто */}
+          {showVehicleForm && (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-3 space-y-2">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase mb-0.5">Госномер *</label>
+                  <input
+                    type="text"
+                    placeholder="А 123 АА 77"
+                    className="w-full rounded-lg border-slate-200 bg-white p-2 text-sm font-black uppercase focus:ring-2 focus:ring-blue-500 transition-all"
+                    value={newVehicle.plateNumber}
+                    onChange={e => setNewVehicle({ ...newVehicle, plateNumber: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase mb-0.5">Марка</label>
+                  <input
+                    type="text"
+                    placeholder="КАМАЗ"
+                    className="w-full rounded-lg border-slate-200 bg-white p-2 text-sm font-bold focus:ring-2 focus:ring-blue-500 transition-all"
+                    value={newVehicle.brand}
+                    onChange={e => setNewVehicle({ ...newVehicle, brand: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase mb-0.5">Тип техники</label>
+                  <select
+                    className="w-full rounded-lg border-slate-200 bg-white p-2 text-xs font-bold focus:ring-2 focus:ring-blue-500 transition-all"
+                    value={newVehicle.type}
+                    onChange={e => setNewVehicle({ ...newVehicle, type: e.target.value as AssetType })}
+                  >
+                    {Object.values(AssetType).map(t => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase mb-0.5">Объём м³</label>
+                  <input
+                    type="number"
+                    placeholder="20"
+                    className="w-full rounded-lg border-slate-200 bg-white p-2 text-sm font-bold focus:ring-2 focus:ring-blue-500 transition-all"
+                    value={newVehicle.capacityM3}
+                    onChange={e => setNewVehicle({ ...newVehicle, capacityM3: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="flex gap-2 justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowVehicleForm(false)}
+                  className="px-3 py-1.5 text-[10px] font-bold text-slate-400 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAddVehicle}
+                  disabled={!newVehicle.plateNumber.trim()}
+                  className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-[10px] font-black uppercase disabled:opacity-30 hover:bg-blue-700 transition-colors"
+                >
+                  Добавить
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Список автомобилей */}
+          {contractorVehicles.length > 0 ? (
+            <div className="space-y-1.5">
+              {contractorVehicles.map(v => (
+                <div key={v.id} className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 group">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="bg-slate-900 text-white px-2 py-0.5 rounded-md text-[11px] font-black tracking-wider flex-shrink-0">
+                      {v.plateNumber}
+                    </span>
+                    <span className="text-xs font-bold text-slate-600 truncate">
+                      {v.brand || v.type}
+                    </span>
+                    {v.capacityM3 && (
+                      <span className="text-[10px] text-slate-400">{v.capacityM3}м³</span>
+                    )}
+                    <span className="text-[10px] text-slate-400">{v.type}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onDeleteVehicle?.(v.id)}
+                    className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-red-50 transition-all"
+                    title="Удалить"
+                  >
+                    <Trash2 size={14} className="text-red-400" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-[10px] text-slate-300 italic">
+              Нет автомобилей. Нажмите «Добавить авто» чтобы внести госномера.
+            </div>
+          )}
+        </div>
+
         <div>
           <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Техника в парке</label>
-          
+
           <div className="flex flex-wrap gap-2 mb-3">
             {COMMON_EQUIPMENT.map(item => (
               <button
@@ -121,8 +276,8 @@ const ContractorForm: React.FC<ContractorFormProps> = ({ initialData, onSubmit, 
                 type="button"
                 onClick={() => addEquipment(item)}
                 className={`text-[10px] px-3 py-1.5 rounded-full font-bold transition-all border ${
-                  formData.equipment.includes(item) 
-                  ? 'bg-blue-600 text-white border-blue-600' 
+                  formData.equipment.includes(item)
+                  ? 'bg-blue-600 text-white border-blue-600'
                   : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
                 }`}
               >
