@@ -1,9 +1,35 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Order, OrderStatus, AssetType, getOrderStatusLabel, normalizeOrderStatus, formatDateTime } from './types';
 
+// Типы для Leaflet (карты)
+interface LeafletMap {
+  setView: (center: [number, number], zoom: number) => LeafletMap;
+  remove: () => void;
+  fitBounds: (bounds: [[number, number], [number, number]]) => LeafletMap;
+}
+
+interface LeafletMarker {
+  remove: () => void;
+  on: (event: string, handler: () => void) => LeafletMarker;
+  setIcon: (icon: LeafletIcon) => LeafletMarker;
+  openPopup: () => LeafletMarker;
+  closePopup: () => LeafletMarker;
+  bindPopup: (content: string) => LeafletMarker;
+}
+
+interface LeafletIcon {
+  options: Record<string, unknown>;
+}
+
 declare global {
   interface Window {
-    L: any;
+    L: {
+      map: (element: HTMLElement, options?: Record<string, unknown>) => LeafletMap;
+      tileLayer: (url: string, options?: Record<string, unknown>) => { addTo: (map: LeafletMap) => void };
+      marker: (coords: [number, number], options?: { icon?: LeafletIcon }) => LeafletMarker & { addTo: (map: LeafletMap) => LeafletMarker };
+      divIcon: (options: Record<string, unknown>) => LeafletIcon;
+      latLngBounds: (coords: [number, number][]) => [[number, number], [number, number]];
+    };
   }
 }
 
@@ -22,8 +48,8 @@ const MapDashboard: React.FC<MapDashboardProps> = ({
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<any>(null);
-  const markersRef = useRef<any[]>([]);
+  const mapInstanceRef = useRef<LeafletMap | null>(null);
+  const markersRef = useRef<LeafletMarker[]>([]);
 
   // Центр Москвы
   const defaultCenter: [number, number] = [55.7512, 37.6184];

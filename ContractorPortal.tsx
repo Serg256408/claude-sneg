@@ -3,10 +3,35 @@ import { Order, OrderStatus, AssetType, Contractor, Bid, DriverAssignment, Messa
 import DriverPortal from './DriverPortal';
 import ConfirmModal from './ConfirmModal';
 
-// Декларация для Leaflet (карты)
+// Типы для Leaflet (карты)
+interface LeafletMap {
+  setView: (center: [number, number], zoom: number) => LeafletMap;
+  remove: () => void;
+  fitBounds: (bounds: [[number, number], [number, number]]) => LeafletMap;
+}
+
+interface LeafletMarker {
+  remove: () => void;
+  on: (event: string, handler: () => void) => LeafletMarker;
+  setIcon: (icon: LeafletIcon) => LeafletMarker;
+  openPopup: () => LeafletMarker;
+  closePopup: () => LeafletMarker;
+  bindPopup: (content: string) => LeafletMarker;
+}
+
+interface LeafletIcon {
+  options: Record<string, unknown>;
+}
+
 declare global {
   interface Window {
-    L: any;
+    L: {
+      map: (element: HTMLElement, options?: Record<string, unknown>) => LeafletMap;
+      tileLayer: (url: string, options?: Record<string, unknown>) => { addTo: (map: LeafletMap) => void };
+      marker: (coords: [number, number], options?: { icon?: LeafletIcon }) => LeafletMarker & { addTo: (map: LeafletMap) => LeafletMarker };
+      divIcon: (options: Record<string, unknown>) => LeafletIcon;
+      latLngBounds: (coords: [number, number][]) => [[number, number], [number, number]];
+    };
   }
 }
 
@@ -96,8 +121,8 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 
   // === Карта для биржи ===
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<any>(null);
-  const markersRef = useRef<any[]>([]);
+  const mapInstanceRef = useRef<LeafletMap | null>(null);
+  const markersRef = useRef<LeafletMarker[]>([]);
   const [hoveredMapId, setHoveredMapId] = useState<string | null>(null);
   const defaultCenter: [number, number] = [55.7512, 37.6184]; // Москва
 
@@ -870,7 +895,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                 </div>
                 <div
                   ref={mapRef}
-                  className="w-full h-[280px] md:h-[350px]"
+                  className="w-full h-[280px] md:h-[350px] relative z-0"
                   style={{ background: '#e5e7eb' }}
                 />
                 <div className="px-4 py-2 bg-white/5 flex items-center gap-4">
@@ -1727,7 +1752,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
       </div>
 
       {chatModal.isOpen && chatOrder && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-[1000] p-4">
           <div className="bg-[#12192c] rounded-3xl p-6 max-w-lg w-full shadow-2xl border border-white/10">
             <h3 className="text-lg font-black uppercase tracking-tight mb-2">
               💬 Переписка с диспетчером
@@ -1793,7 +1818,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 
       {/* Модалка отклика */}
       {showBidModal && selectedOrder && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-[1000] p-4">
           <div className="bg-[#12192c] rounded-3xl p-6 max-w-md w-full shadow-2xl border border-white/10">
             <h3 className="text-lg font-black uppercase tracking-tight mb-2">Отклик на заказ</h3>
             <p className="text-[10px] text-slate-500 uppercase mb-6">{selectedOrder.address}</p>

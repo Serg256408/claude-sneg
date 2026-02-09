@@ -139,22 +139,22 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ orders, customers, comp
         email: companySettings.email || '',
       };
     }
-    // Значения по умолчанию (Транском)
+    // Значения по умолчанию (заполните в AdminPanel → Реквизиты)
     return {
-      name: 'Транском',
-      fullName: 'ООО "Транском"',
-      inn: '5001098904',
-      kpp: '500101001',
-      ogrn: '1145001001530',
-      legalAddress: 'Московская область, г. Балашиха',
-      bankName: 'Московский филиал ПАО «Промсвязьбанк»',
-      bankAccount: '40702810900000035482',
-      corrAccount: '30101810400000000555',
-      bik: '044525555',
-      directorName: 'Терехов Сергей Юрьевич',
+      name: 'Название компании',
+      fullName: 'ООО "Название компании"',
+      inn: '0000000000',
+      kpp: '000000000',
+      ogrn: '0000000000000',
+      legalAddress: 'Адрес регистрации',
+      bankName: 'Название банка',
+      bankAccount: '00000000000000000000',
+      corrAccount: '00000000000000000000',
+      bik: '000000000',
+      directorName: 'ФИО Директора',
       directorPosition: 'Генеральный директор',
-      phone: '8-915-019-59-41',
-      email: 'Spezavtoteh@gmail.com',
+      phone: '+7 (000) 000-00-00',
+      email: 'email@example.com',
     };
   }, [companySettings]);
 

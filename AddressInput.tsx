@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
-// DaData API ключ (хардкод для клиентского приложения)
-const DADATA_API_KEY = '0050670b75e71f8698ac6fcee62666051c123f90';
+// DaData API ключ из environment variables
+const DADATA_API_KEY = import.meta.env.VITE_DADATA_API_KEY || '';
 
 interface AddressInputProps {
   value: string;
@@ -63,6 +63,15 @@ export default function AddressInput({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Cleanup debounce timer при unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, []);
+
   // Поиск подсказок через DaData
   const fetchSuggestions = useCallback(async (query: string) => {
     if (query.length < 3) {
@@ -98,8 +107,6 @@ export default function AddressInput({
       }
 
       const data = await response.json();
-      console.log('DaData подсказки:', data.suggestions);
-
       setSuggestions(data.suggestions || []);
       setIsOpen((data.suggestions || []).length > 0);
       setSelectedIndex(-1);

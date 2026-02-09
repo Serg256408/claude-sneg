@@ -4,6 +4,7 @@ import {
   UserRole,
   Company,
   CompanyType,
+  PaymentType,
   PriceBookItem,
   ServiceType,
   CommissionSettings,
@@ -59,23 +60,23 @@ const DEFAULT_COMMISSION: CommissionSettings = {
   createdAt: new Date().toISOString(),
 };
 
-// Дефолтные настройки компании (реквизиты Транском)
+// Дефолтные настройки компании (заполните свои реквизиты)
 const DEFAULT_COMPANY_SETTINGS: CompanySettings = {
-  id: 'transkom',
-  name: 'Транском',
-  fullName: 'ООО "Транском"',
-  legalAddress: 'Московская область, г. Балашиха',
-  inn: '5001098904',
-  kpp: '500101001',
-  ogrn: '1145001001530',
-  bankName: 'Московский филиал ПАО «Промсвязьбанк»',
-  bankAccount: '40702810900000035482',
-  corrAccount: '30101810400000000555',
-  bik: '044525555',
-  directorName: 'Терехов Сергей Юрьевич',
+  id: 'company-default',
+  name: 'Название компании',
+  fullName: 'ООО "Название компании"',
+  legalAddress: 'Адрес регистрации',
+  inn: '0000000000',
+  kpp: '000000000',
+  ogrn: '0000000000000',
+  bankName: 'Название банка',
+  bankAccount: '00000000000000000000',
+  corrAccount: '00000000000000000000',
+  bik: '000000000',
+  directorName: 'ФИО Директора',
   directorPosition: 'Генеральный директор',
-  phone: '8-915-019-59-41',
-  email: 'Spezavtoteh@gmail.com',
+  phone: '+7 (000) 000-00-00',
+  email: 'email@example.com',
   createdAt: new Date().toISOString(),
 };
 
@@ -171,7 +172,7 @@ export default function AdminPanel({
   // Форма компании
   const [newCompany, setNewCompany] = useState<Partial<Company>>({
     type: CompanyType.CUSTOMER,
-    defaultPaymentType: 'С НДС 20%' as any,
+    defaultPaymentType: PaymentType.VAT_20,
     isVerified: false,
   });
 
@@ -196,13 +197,13 @@ export default function AdminPanel({
         bankAccount: newCompany.bankAccount,
         phone: newCompany.phone || '',
         email: newCompany.email,
-        defaultPaymentType: newCompany.defaultPaymentType || 'С НДС 20%' as any,
+        defaultPaymentType: newCompany.defaultPaymentType || PaymentType.VAT_20,
         isVerified: newCompany.isVerified || false,
         createdAt: new Date().toISOString(),
       };
       onAddCompany(company);
     }
-    setNewCompany({ type: CompanyType.CUSTOMER, defaultPaymentType: 'С НДС 20%' as any, isVerified: false });
+    setNewCompany({ type: CompanyType.CUSTOMER, defaultPaymentType: PaymentType.VAT_20, isVerified: false });
     setShowCompanyForm(false);
     setEditingItem(null);
   };
@@ -611,7 +612,7 @@ export default function AdminPanel({
                   <select
                     className="w-full rounded-xl border border-slate-200 px-4 py-2"
                     value={editingSettings.platformCommissionType}
-                    onChange={e => setEditingSettings({ ...editingSettings, platformCommissionType: e.target.value as any })}
+                    onChange={e => setEditingSettings({ ...editingSettings, platformCommissionType: e.target.value as 'percent' | 'fixed' | 'percent_plus_fixed' })}
                   >
                     <option value="percent">Процент</option>
                     <option value="fixed">Фиксированная</option>
@@ -664,7 +665,7 @@ export default function AdminPanel({
                   <select
                     className="w-full rounded-xl border border-slate-200 px-4 py-2"
                     value={editingSettings.managerBonusType}
-                    onChange={e => setEditingSettings({ ...editingSettings, managerBonusType: e.target.value as any })}
+                    onChange={e => setEditingSettings({ ...editingSettings, managerBonusType: e.target.value as 'gross_profit_percent' | 'revenue_percent' | 'fixed' })}
                   >
                     <option value="gross_profit_percent">% от прибыли</option>
                     <option value="revenue_percent">% от выручки</option>
