@@ -1,4 +1,7 @@
-﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useToast } from './ToastContext';
+import { ClipboardList, Truck, Clock, CheckCircle, AlertTriangle } from 'lucide-react';
+import { StatCard } from './StatCard';
 import ContractorPortal from './ContractorPortal';
 import CustomerPortal from './CustomerPortal';
 import CustomerFormDispatcher from './CustomerForm_Dispatcher';
@@ -666,6 +669,7 @@ const getOrderSortTimestamp = (order: Order) => {
 };
 
 export default function App() {
+  const toast = useToast();
   const [role, setRole] = useState<Role>(() => {
     const stored = localStorage.getItem(LS_KEYS.role) as Role | 'driver' | null;
     if (stored === 'driver') return 'contractor';
@@ -944,6 +948,16 @@ export default function App() {
     showCompleted
   );
 
+  // Статистика для дашборда диспетчера
+  const dashboardStats = useMemo(() => {
+    const active = orders.filter(o => ![OrderStatus.COMPLETED, OrderStatus.CANCELLED, OrderStatus.DRAFT].includes(o.status as OrderStatus));
+    const inProgress = orders.filter(o => [OrderStatus.EN_ROUTE, OrderStatus.IN_PROGRESS].includes(o.status as OrderStatus));
+    const awaitingAssignment = orders.filter(o => o.status === OrderStatus.SEARCHING_EQUIPMENT);
+    const today = new Date().toDateString();
+    const completedToday = orders.filter(o => o.status === OrderStatus.COMPLETED && new Date(o.updatedAt || o.createdAt).toDateString() === today);
+    return { active: active.length, inProgress: inProgress.length, awaiting: awaitingAssignment.length, completedToday: completedToday.length };
+  }, [orders]);
+
   const filteredCustomers = useMemo(() => {
     const term = customerDirectorySearch.trim().toLowerCase();
     if (!term) return customers;
@@ -1020,6 +1034,7 @@ export default function App() {
         feedback: partial.feedback,
       };
       setOrders(prev => [order, ...prev]);
+      toast.success(`Заказ ${order.orderNumber || ''} создан`);
 
       // Логируем создание заказа
       addActivityLog({
@@ -1113,7 +1128,8 @@ export default function App() {
     setEditingOrder(undefined);
     setSelectedMapOrder(null);
     setView('dashboard');
-  }, []);
+    toast.info('Заказ удалён');
+  }, [toast]);
 
   const addCustomer = useCallback((customer: Customer) => {
     const normalized = normalizeCustomer(customer);
@@ -1571,7 +1587,7 @@ export default function App() {
             Сбросить заказы
           </button>
           <button
-            className="rounded-xl bg-slate-900 text-white px-4 py-2 text-sm font-black"
+            className="rounded-xl bg-slate-900 text-white px-4 py-2 text-sm font-black btn-lift"
             onClick={() => {
               setEditingOrder(undefined);
               setView('order-form');
@@ -1636,9 +1652,17 @@ export default function App() {
 
       <div className="max-w-7xl mx-auto px-4 py-8">
         {role === 'dispatcher' && view === 'dashboard' && (
-          <div className="space-y-6">
-            <MapDashboard 
-              orders={filteredOrders} 
+          <div className="space-y-6 view-enter">
+            {/* Статистика */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <StatCard icon={<ClipboardList size={20} />} label="Активных заказов" value={dashboardStats.active} color="blue" dark={false} />
+              <StatCard icon={<Truck size={20} />} label="В работе" value={dashboardStats.inProgress} color="green" dark={false} />
+              <StatCard icon={<Clock size={20} />} label="Ожидают технику" value={dashboardStats.awaiting} color="amber" dark={false} />
+              <StatCard icon={<CheckCircle size={20} />} label="Завершено сегодня" value={dashboardStats.completedToday} color="purple" dark={false} />
+            </div>
+
+            <MapDashboard
+              orders={filteredOrders}
               onSelectOrder={o => setSelectedMapOrder(o)}
             />
 
@@ -1791,6 +1815,11 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Счётчик результатов */}
+              <div className="text-xs text-slate-400 mb-3 font-medium">
+                Показано {filteredOrders.length} из {orders.length} заказов
+              </div>
+
               <div className="overflow-auto">
                 <table className="min-w-full text-sm">
                   <thead className="text-left text-slate-400 uppercase text-[10px] tracking-widest font-black">
@@ -1807,7 +1836,7 @@ export default function App() {
                       const tone = getStatusTone(o.status);
                       const toneStyle = STATUS_TONE_STYLES[tone];
                       return (
-                        <tr key={o.id} className="hover:bg-slate-50">
+                        <tr key={o.id} className="hover:bg-blue-50/50 cursor-pointer transition-colors">
                           <td className="py-3 pr-4 font-black">{o.orderNumber || o.id}</td>
                           <td className="py-3 pr-4 font-bold">{o.customer}</td>
                           <td className="py-3 pr-4">{o.address}</td>
@@ -2021,7 +2050,7 @@ export default function App() {
         )}
 
         {role === 'dispatcher' && view === 'order-form' && (
-          <OrderForm
+          <div className="view-enter"><OrderForm
             initialData={editingOrder}
             contractors={contractors}
             customers={customers}
@@ -2045,7 +2074,7 @@ export default function App() {
             currentUser={currentManager}
             onRemoveAssignment={removeDriverAssignment}
             onUpdateOrder={updateOrder}
-          />
+          /></div>
         )}
 
         {role === 'dispatcher' && view === 'customer-form' && (

@@ -58,7 +58,114 @@
       button, input, select, a {
         min-height: 44px;
       }
+      /* Fix tiny text on mobile */
+      .text-\[8px\] { font-size: 10px !important; }
+      .text-\[9px\] { font-size: 11px !important; }
+      .text-\[10px\] { font-size: 12px !important; }
     }
+
+    /* === UX Animations === */
+
+    /* Tab/View transitions */
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes tabSlideIn {
+      from { opacity: 0; transform: translateX(12px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    .view-enter { animation: fadeSlideIn 250ms ease-out; }
+    .tab-enter { animation: tabSlideIn 200ms ease-out; }
+
+    /* Button hover lift */
+    .btn-lift {
+      transition: all 150ms ease;
+    }
+    .btn-lift:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    .btn-lift:active {
+      transform: translateY(0) scale(0.97);
+    }
+
+    /* Card hover */
+    .card-hover {
+      transition: all 200ms ease;
+    }
+    .card-hover:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+    }
+
+    /* Badge pop animation */
+    @keyframes badgePop {
+      0% { transform: scale(0); }
+      50% { transform: scale(1.2); }
+      100% { transform: scale(1); }
+    }
+    .badge-pop { animation: badgePop 300ms ease-out; }
+
+    /* Number counter animation */
+    @keyframes countUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .count-up { animation: countUp 400ms ease-out; }
+
+    /* Modal animations */
+    @keyframes modalIn {
+      from { opacity: 0; transform: scale(0.95) translateY(8px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    @keyframes modalBackdropIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .modal-enter { animation: modalIn 200ms ease-out; }
+    .modal-backdrop-enter { animation: modalBackdropIn 150ms ease-out; }
+
+    /* Toast animations */
+    @keyframes toastSlideIn {
+      from { opacity: 0; transform: translateX(100%); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes toastSlideOut {
+      from { opacity: 1; transform: translateX(0); }
+      to { opacity: 0; transform: translateX(100%); }
+    }
+    .toast-enter { animation: toastSlideIn 300ms ease-out; }
+    .toast-exit { animation: toastSlideOut 200ms ease-in forwards; }
+
+    /* Skeleton shimmer */
+    @keyframes shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    .skeleton-shimmer {
+      background: linear-gradient(90deg, transparent 25%, rgba(255,255,255,0.08) 50%, transparent 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+    }
+
+    /* Spinner */
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .spinner {
+      border: 2px solid transparent;
+      border-top-color: currentColor;
+      border-radius: 50%;
+      animation: spin 600ms linear infinite;
+    }
+
+    /* Timeline pulse */
+    @keyframes timelinePulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
+      50% { box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
+    }
+    .timeline-pulse { animation: timelinePulse 2s infinite; }
   </style>
 
   <script type="importmap">

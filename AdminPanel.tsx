@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { useToast } from './ToastContext';
 import {
   User,
   UserRole,
@@ -109,6 +110,7 @@ export default function AdminPanel({
   const [showVehicleForm, setShowVehicleForm] = useState(false);
   const [editingItem, setEditingItem] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const toast = useToast();
 
   const settings = commissionSettings || DEFAULT_COMMISSION;
 
@@ -145,7 +147,7 @@ export default function AdminPanel({
 
   const handleSaveUser = () => {
     if (!newUser.name || !newUser.phone) {
-      alert('Заполните имя и телефон');
+      toast.warning('Заполните имя и телефон');
       return;
     }
     if (editingItem) {
@@ -178,7 +180,7 @@ export default function AdminPanel({
 
   const handleSaveCompany = () => {
     if (!newCompany.name || !newCompany.inn) {
-      alert('Заполните название и ИНН');
+      toast.warning('Заполните название и ИНН');
       return;
     }
     if (editingItem) {
@@ -217,7 +219,7 @@ export default function AdminPanel({
 
   const handleSavePrice = () => {
     if (!newPrice.workTypeName || !newPrice.baseCustomerPrice) {
-      alert('Заполните название и цену');
+      toast.warning('Заполните название и цену');
       return;
     }
     if (editingItem) {
@@ -253,7 +255,7 @@ export default function AdminPanel({
 
   const handleSaveVehicle = () => {
     if (!newVehicle.plateNumber) {
-      alert('Заполните госномер');
+      toast.warning('Заполните госномер');
       return;
     }
     if (editingItem) {

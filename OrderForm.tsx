@@ -1,4 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useToast } from './ToastContext';
+import { OrderTimeline } from './OrderTimeline';
 import { Order, OrderStatus, ManagerName, Contractor, AssetRequirement, AssetType, Customer, Bid, Quote, ActionLog, Message, DriverAssignment, formatPrice, formatDateTime, generateId, PriceUnit, FULL_ORDER_STATUS_FLOW, getOrderStatusLabel, getNormalizedStatusLabel, normalizeOrderStatus, calculateOrderTotals, isTruckType, isLoaderType, toLocalDateTimeInputValue, WORKFLOW_STAGES, getStatusStage, getShiftHours } from './types';
 import ConfirmModal from './ConfirmModal';
 import AddressInput from './AddressInput';
@@ -49,6 +51,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
   });
 
   const [activeSection, setActiveSection] = useState<'info' | 'pricing' | 'trips' | 'history'>('info');
+  const toast = useToast();
   const [customerSearch, setCustomerSearch] = useState(initialData?.customer || '');
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [showQuoteModal, setShowQuoteModal] = useState(false);
@@ -207,7 +210,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
     const normalizedStart = edit.start || driver.shiftStartTime || '';
     const normalizedEnd = edit.end || driver.shiftEndTime || '';
     if (!normalizedStart || !normalizedEnd) {
-      alert('Укажите время начала и окончания смены.');
+      toast.warning('Укажите время начала и окончания смены');
       return;
     }
     const parsedPrice = Number((edit.price || '0').replace(',', '.'));
@@ -558,14 +561,14 @@ const OrderForm: React.FC<OrderFormProps> = ({
     } else if (action === 'send_direct') {
       updated.isBirzhaOpen = true;
       logAction('Отправлены персональные предложения подрядчикам', 'other');
-      alert('📨 Уведомления отправлены подрядчикам!');
+      toast.success('Уведомления отправлены подрядчикам');
     } else if (action === 'change_status' && newStatus) {
       if ([OrderStatus.COMPLETED, OrderStatus.AWAITING_CLOSING_DOCS].includes(newStatus) && !allDriversCompleted) {
-        alert('Завершить вывоз можно только после того, как вся техника завершила работу.');
+        toast.error('Завершить вывоз можно только после того, как вся техника завершила работу');
         return;
       }
       if (newStatus === OrderStatus.COMPLETED && !isPaymentConfirmed) {
-        alert('Завершить сделку можно только после поступления доплаты.');
+        toast.error('Завершить сделку можно только после поступления доплаты');
         return;
       }
       const prevStatus = updated.status;
@@ -904,7 +907,13 @@ const OrderForm: React.FC<OrderFormProps> = ({
           
           {/* === СЕКЦИЯ ИНФО === */}
           {activeSection === 'info' && (
-            <div className="space-y-6 animate-in fade-in">
+            <div className="space-y-6 tab-enter">
+              {/* Таймлайн статуса заказа */}
+              {initialData && (
+                <div className="bg-[#12192c] p-5 rounded-2xl border border-white/5">
+                  <OrderTimeline currentStatus={formData.status} />
+                </div>
+              )}
               {/* Заказчик и адрес */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5 relative" ref={dropdownRef}>
@@ -1359,7 +1368,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
 
           {/* === СЕКЦИЯ ЦЕН === */}
           {activeSection === 'pricing' && (
-            <div className="space-y-6 animate-in fade-in">
+            <div className="space-y-6 tab-enter">
               {/* Добавление техники */}
               <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5">
                 <div className="flex justify-between items-center mb-6">
@@ -1597,7 +1606,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
 
           {/* === СЕКЦИЯ РЕЙСОВ === */}
           {activeSection === 'trips' && (
-            <div className="space-y-6 animate-in fade-in">
+            <div className="space-y-6 tab-enter">
               {/* Статистика */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="bg-[#12192c] p-5 rounded-2xl border border-white/5 text-center">
@@ -1708,7 +1717,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
 
           {/* === СЕКЦИЯ ИСТОРИИ === */}
           {activeSection === 'history' && (
-            <div className="space-y-4 animate-in fade-in">
+            <div className="space-y-4 tab-enter">
               {(formData.actionLog || []).length === 0 ? (
                 <div className="text-center py-16 opacity-30">
                   <div className="text-5xl mb-4">📜</div>
@@ -1843,7 +1852,7 @@ const OrderForm: React.FC<OrderFormProps> = ({
       {/* Модалка отправки сообщения (подрядчику, водителю или клиенту) */}
       {messageModal.isOpen && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-[60] p-4">
-          <div className="bg-[#12192c] rounded-3xl p-6 max-w-md w-full shadow-2xl border border-white/10 animate-in fade-in zoom-in duration-200">
+          <div className="bg-[#12192c] rounded-3xl p-6 max-w-md w-full shadow-2xl border border-white/10 modal-enter">
             <h3 className="text-lg font-black uppercase tracking-tight mb-2">
               💬 {messageModal.mode === 'customer' ? 'Сообщение клиенту' : 'Сообщение подрядчику'}
             </h3>

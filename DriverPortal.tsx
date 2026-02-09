@@ -1,4 +1,7 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useToast } from './ToastContext';
+import { Truck, Mail, Globe, Wallet } from 'lucide-react';
+import { EmptyState } from './EmptyState';
 import { Order, OrderStatus, TripEvidence, Contractor, AssetType, DriverAssignment, Message, formatPrice, formatDateTime, generateId, DateRange, isOrderInDateRange, normalizeOrderStatus, getOrderStatusLabel, calculateAssignmentEarnings, PriceUnit, isLoaderType, getShiftHours, findRequirementForAssignment } from './types';
 import ConfirmModal from './ConfirmModal';
 
@@ -35,6 +38,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
   embedded = false,
   hideCompletedAssignments = false
 }) => {
+  const toast = useToast();
   const [selectedOrder, setSelectedOrder] = useState<{ order: Order; type: AssetType } | null>(null);
   const [activeTab, setActiveTab] = useState<'mine' | 'public' | 'company' | 'earnings'>('mine');
   const [isCapturing, setIsCapturing] = useState(false);
@@ -398,7 +402,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
     const hoursDiff = (now.getTime() - photoDate.getTime()) / (1000 * 60 * 60);
     
     if (hoursDiff > 24) {
-      alert('⚠️ Внимание: Фотография сделана более 24 часов назад. Рекомендуется сделать свежее фото.');
+      toast.warning('Фотография сделана более 24 часов назад. Рекомендуется сделать свежее фото');
     }
 
     const reader = new FileReader();
@@ -422,7 +426,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
   // Отправка рейса
   const submitTrip = useCallback(() => {
     if (!selectedOrder || capturedPhotos.length === 0) {
-      alert('Необходимо сделать хотя бы одно фото!');
+      toast.warning('Необходимо сделать хотя бы одно фото');
       return;
     }
 
@@ -433,7 +437,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
     const completedStatuses = [OrderStatus.COMPLETED, OrderStatus.CANCELLED];
     const assignmentCompleted = currentDriverAssignment?.status === 'completed';
     if (assignmentCompleted || completedStatuses.includes(normalizeOrderStatus(activeOrder.status))) {
-      alert('❌ Работа завершена. Отправка рейсов невозможна.');
+      toast.error('Работа завершена. Отправка рейсов невозможна');
       return;
     }
 
@@ -465,7 +469,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
     }
     setCapturedPhotos([]);
     setShowPhotoPreview(false);
-    alert('✅ Рейс отправлен на проверку!');
+    toast.success('Рейс отправлен на проверку');
   }, [selectedOrder, capturedPhotos, currentPosition, driverName, orders, onReportTrip, onUpdateDriverAssignment, currentDriverAssignment]);
 
   // Текущий выбранный заказ (обновлённый)
@@ -740,14 +744,11 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
               );
             })
           ) : (
-            <div className="text-center py-20 opacity-20">
-              <div className="text-6xl mb-4">
-                {activeTab === 'mine' ? '🚛' : activeTab === 'company' ? '📨' : '🌐'}
-              </div>
-              <div className="text-[10px] font-black uppercase tracking-[0.4em]">
-                {activeTab === 'mine' ? 'Нет активных работ' : 'Нет доступных заказов'}
-              </div>
-            </div>
+            <EmptyState
+              icon={activeTab === 'mine' ? <Truck size={24} /> : activeTab === 'company' ? <Mail size={24} /> : <Globe size={24} />}
+              title={activeTab === 'mine' ? 'Нет активных работ' : 'Нет доступных заказов'}
+              description={activeTab === 'mine' ? 'Примите заказ с биржи или дождитесь назначения' : 'Новые заказы скоро появятся'}
+            />
           )
         )}
 
@@ -1264,7 +1265,7 @@ const DriverPortal: React.FC<DriverPortalProps> = ({
                   <button 
                     onClick={() => { 
                       onAcceptJob(activeSelectedOrder.id, driverContractorId, selectedOrder!.type); 
-                      alert('✅ Заявка отправлена! Ожидайте подтверждения менеджера.');
+                      toast.success('Заявка отправлена! Ожидайте подтверждения менеджера');
                     }} 
                     className="w-full bg-gradient-to-r from-blue-600 to-blue-700 p-10 rounded-3xl text-2xl font-black uppercase tracking-widest border-b-8 border-blue-800 shadow-2xl active:scale-95 active:border-b-0 transition-all"
                   >

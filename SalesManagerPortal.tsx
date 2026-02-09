@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { useToast } from './ToastContext';
 import {
   Lead,
   LeadStatus,
@@ -43,6 +44,7 @@ export default function SalesManagerPortal({
   onConvertLeadToOrder,
   onUpdateOrder,
 }: SalesManagerPortalProps) {
+  const toast = useToast();
   const [activeTab, setActiveTab] = useState<'leads' | 'my_orders' | 'new_lead'>('leads');
   const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all'>('all');
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
@@ -94,7 +96,7 @@ export default function SalesManagerPortal({
 
   const handleCreateLead = () => {
     if (!newLead.customerName || !newLead.customerPhone) {
-      alert('Заполните имя и телефон клиента');
+      toast.warning('Заполните имя и телефон клиента');
       return;
     }
     const lead: Lead = {
@@ -140,7 +142,7 @@ export default function SalesManagerPortal({
 
   const handleConvertToOrder = (lead: Lead) => {
     if (lead.status !== LeadStatus.OFFER_SENT && lead.status !== LeadStatus.QUALIFIED) {
-      alert('Можно конвертировать только квалифицированные лиды или после отправки КП');
+      toast.warning('Можно конвертировать только квалифицированные лиды или после отправки КП');
       return;
     }
     onConvertLeadToOrder(lead);

@@ -30,8 +30,8 @@ const ConfirmModal: React.FC<ConfirmModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-[1000] p-4">
-      <div className="bg-[#12192c] rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-white/10 animate-in fade-in zoom-in duration-200">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-[1000] p-4 modal-backdrop-enter">
+      <div className="bg-[#12192c] rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-white/10 modal-enter">
         <h3 className="text-lg font-black uppercase tracking-tight mb-2">{title}</h3>
         <p className="text-sm text-slate-400 mb-6">{message}</p>
 

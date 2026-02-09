@@ -1,4 +1,7 @@
-﻿import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useToast } from './ToastContext';
+import { Search, Mail, Truck, Wallet, MapPin } from 'lucide-react';
+import { EmptyState } from './EmptyState';
 import { Order, OrderStatus, AssetType, Contractor, Bid, DriverAssignment, Message, formatPrice, formatDateTime, generateId, PriceUnit, TripEvidence, DateRange, isOrderInDateRange, getOrderStatusLabel, normalizeOrderStatus, calculateAssignmentEarnings, isLoaderType, getShiftHours, toLocalDateTimeInputValue, Vehicle } from './types';
 import DriverPortal from './DriverPortal';
 import ConfirmModal from './ConfirmModal';
@@ -68,6 +71,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
   onUpdateDriverAssignment,
   onRemoveAssignment
 }) => {
+  const toast = useToast();
   const [activeTab, setActiveTab] = useState<'available' | 'direct' | 'active' | 'earnings' | 'driver'>('available');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const getDefaultArrivalTime = () => toLocalDateTimeInputValue(new Date(Date.now() + 60 * 60 * 1000));
@@ -678,7 +682,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
   const handleSubmitBid = useCallback(() => {
     if (!selectedOrder || !currentContractor) return;
     if (!bidForm.estimatedArrival) {
-      alert('Укажите время подачи техники.');
+      toast.warning('Укажите время подачи техники');
       return;
     }
 
@@ -722,11 +726,11 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
     if (!currentContractor) return;
     const proposedPrice = Number(priceInput);
     if (!Number.isFinite(proposedPrice) || proposedPrice <= 0) {
-      alert('Укажите корректную цену.');
+      toast.warning('Укажите корректную цену');
       return;
     }
     if (proposedPrice >= bid.proposedPrice) {
-      alert('Цена должна быть ниже предыдущего предложения.');
+      toast.warning('Цена должна быть ниже предыдущего предложения');
       return;
     }
 
@@ -883,7 +887,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
         
         {/* === БИРЖА === */}
         {activeTab === 'available' && (
-          <div className="space-y-4 animate-in fade-in">
+          <div className="space-y-4 tab-enter">
             {/* Карта заказов на бирже */}
             {filteredAvailableOrders.length > 0 && (
               <div className="bg-[#12192c] rounded-2xl border border-white/5 overflow-hidden">
@@ -977,10 +981,11 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 
             {/* Доступные заказы */}
             {filteredAvailableOrders.length === 0 ? (
-              <div className="text-center py-20 opacity-20">
-                <div className="text-6xl mb-4">🌐</div>
-                <div className="text-[10px] font-black uppercase tracking-[0.4em]">Нет доступных заказов</div>
-              </div>
+              <EmptyState
+                icon={<Search size={24} />}
+                title="Нет доступных заказов"
+                description="Новые заказы появятся на бирже, когда диспетчеры опубликуют их"
+              />
             ) : (
               filteredAvailableOrders.map(order => {
                 // Типы техники, на которые подрядчик уже назначен
@@ -1087,11 +1092,11 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                                         if (rawPrice) {
                                           const proposed = Number(rawPrice);
                                           if (!Number.isFinite(proposed) || proposed <= 0) {
-                                            alert('Укажите корректную цену.');
+                                            toast.warning('Укажите корректную цену');
                                             return;
                                           }
                                           if (basePrice > 0 && proposed >= basePrice) {
-                                            alert('Цена должна быть ниже предложенной.');
+                                            toast.warning('Цена должна быть ниже предложенной');
                                             return;
                                           }
                                           openBidModal(order, req.type, proposed, bidKey);
@@ -1151,12 +1156,13 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 
         {/* === ПРЯМЫЕ ПРЕДЛОЖЕНИЯ === */}
         {activeTab === 'direct' && (
-          <div className="space-y-4 animate-in fade-in">
+          <div className="space-y-4 tab-enter">
             {filteredDirectOffers.length === 0 ? (
-              <div className="text-center py-20 opacity-20">
-                <div className="text-6xl mb-4">📨</div>
-                <div className="text-[10px] font-black uppercase tracking-[0.4em]">Нет прямых предложений</div>
-              </div>
+              <EmptyState
+                icon={<Mail size={24} />}
+                title="Нет прямых предложений"
+                description="Здесь появятся заказы, назначенные вам напрямую"
+              />
             ) : (
               filteredDirectOffers.map(order => {
                 const directRequirements = order.assetRequirements.filter(r => r.contractorId === currentContractorId);
@@ -1223,11 +1229,11 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
                                         if (rawPrice) {
                                           const proposed = Number(rawPrice);
                                           if (!Number.isFinite(proposed) || proposed <= 0) {
-                                            alert('Укажите корректную цену.');
+                                            toast.warning('Укажите корректную цену');
                                             return;
                                           }
                                           if (basePrice > 0 && proposed >= basePrice) {
-                                            alert('Цена должна быть ниже предложенной.');
+                                            toast.warning('Цена должна быть ниже предложенной');
                                             return;
                                           }
                                           openBidModal(order, req.type, proposed, bidKey);
@@ -1287,12 +1293,13 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 
         {/* === АКТИВНЫЕ ЗАКАЗЫ === */}
         {activeTab === 'active' && (
-          <div className="space-y-4 animate-in fade-in">
+          <div className="space-y-4 tab-enter">
             {filteredActiveOrders.length === 0 ? (
-              <div className="text-center py-20 opacity-20">
-                <div className="text-6xl mb-4">🚛</div>
-                <div className="text-[10px] font-black uppercase tracking-[0.4em]">Нет активных работ</div>
-              </div>
+              <EmptyState
+                icon={<Truck size={24} />}
+                title="Нет активных работ"
+                description="Примите заказ с биржи или дождитесь прямого назначения"
+              />
             ) : (
               filteredActiveOrders.map(order => {
                 const myDrivers = (order.driverDetails || []).filter(d => d.contractorId === currentContractorId);
@@ -1501,7 +1508,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 
         {/* === ФИНАНСЫ === */}
         {activeTab === 'earnings' && (
-          <div className="space-y-4 animate-in fade-in">
+          <div className="space-y-4 tab-enter">
             {/* Общая статистика - компактная */}
             <div className="bg-gradient-to-br from-green-600 to-green-800 p-5 rounded-2xl shadow-2xl">
               <div className="grid grid-cols-4 gap-3">
@@ -1552,9 +1559,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
             {financeSubTab === 'active' && (
               <div className="space-y-3">
               {filteredActiveEarningsByOrder.length === 0 ? (
-                <div className="bg-[#12192c] p-6 rounded-2xl border border-white/5 text-center text-slate-500 text-[10px] uppercase">
-                  Нет данных для отображения
-                </div>
+                <EmptyState icon={<Wallet size={24} />} title="Нет данных о заработке" description="Данные появятся после выполнения заказов" compact />
               ) : (
                 filteredActiveEarningsByOrder.map(entry => (
                   <div key={entry.order.id} className="bg-[#12192c] p-5 rounded-2xl border border-white/5">
@@ -1732,7 +1737,7 @@ const ContractorPortal: React.FC<ContractorPortalProps> = ({
 
         {/* === РЕЙСЫ (ВОДИТЕЛЬ) === */}
         {activeTab === 'driver' && (
-          <div className="animate-in fade-in">
+          <div className="tab-enter">
             <DriverPortal
               key={`driver-${currentContractorId}`}
               orders={filteredDriverOrdersInWork}
