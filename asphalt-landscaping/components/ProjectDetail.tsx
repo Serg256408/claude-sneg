@@ -1,15 +1,16 @@
 
 import React, { useState, useMemo } from 'react';
-import { Project, Resource, Category, EstimateItem, ClientEstimateItem, ServiceCategory, SERVICE_CATEGORY_LABELS, WORK_TYPE_LABELS, WorkType, AsphaltWorkType, LandscapingWorkType, EarthworkType, Expense, EXPENSE_CATEGORY_LABELS, PaymentScheduleItem, formatPrice, formatDate, formatDateTime, WEATHER_LABELS, WEATHER_ICONS, generateId, WizardData, WIZARD_DEFAULTS } from '../types';
+import { Project, Resource, Category, EstimateItem, ClientEstimateItem, ContractAmendment, ServiceCategory, SERVICE_CATEGORY_LABELS, WORK_TYPE_LABELS, WorkType, AsphaltWorkType, LandscapingWorkType, EarthworkType, Expense, EXPENSE_CATEGORY_LABELS, PaymentScheduleItem, formatPrice, formatDate, formatDateTime, WEATHER_LABELS, WEATHER_ICONS, generateId, WizardData, WIZARD_DEFAULTS } from '../types';
 import { Plus, Trash2, BarChart2, MessageSquare, AlertTriangle, Sparkles, Wand2, Loader2, ArrowRight, FileText, Users, HardHat, Wallet, Calendar, Check, X, Clock, Eye, ChevronDown, ChevronUp, Camera, MapPin, Phone, Mail, CreditCard, Receipt, Image, Sun, CloudRain, Send, ExternalLink } from 'lucide-react';
 import { CLIENT_WORK_CATALOG } from '../constants';
 import { loadPriceOverrides, getRecommendedPrice } from '../services/priceListService';
-import { analyzeProfitability, generateSmartEstimate, generateClientEstimateAI, hasApiKey } from '../services/geminiService';
+import { analyzeProfitability, generateSmartEstimate, generateClientEstimateAI, generateMilestonesAI, hasApiKey } from '../services/geminiService';
 import { EstimateWizard } from './EstimateWizard';
 import { buildPromptFromWizard } from '../services/wizardPromptBuilder';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { ChatWidget } from './ChatWidget';
 import { CommercialProposal } from './CommercialProposal';
+import { loadPricingRules } from '../services/pricingRulesService';
 
 interface ProjectDetailProps {
   project: Project;
@@ -48,6 +49,10 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
   const [wizardData, setWizardData] = useState<WizardData>({ ...WIZARD_DEFAULTS });
   const [wizardStep, setWizardStep] = useState(1);
   const [showKPPreview, setShowKPPreview] = useState(false);
+  const [isGeneratingMilestones, setIsGeneratingMilestones] = useState(false);
+  const [showAmendmentForm, setShowAmendmentForm] = useState(false);
+  const [amendmentPrice, setAmendmentPrice] = useState('');
+  const [amendmentReason, setAmendmentReason] = useState('');
 
   const totalCost = useMemo(() => project.items.reduce((sum, item) => sum + item.totalCost, 0), [project.items]);
   const approvedExpenses = useMemo(() => (project.expenses || []).filter(e => e.status === 'approved').reduce((s, e) => s + e.amount, 0), [project.expenses]);
@@ -130,7 +135,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
   };
 
   const handleRunAiAnalysis = async () => {
-    if (!hasApiKey()) { alert('Настройте API-ключ Groq в настройках (иконка шестерёнки вверху).'); return; }
+    if (!hasApiKey()) { alert('Настройте API-ключ AI в настройках (иконка шестерёнки вверху).'); return; }
     setIsAnalyzing(true);
     try {
       const report = await analyzeProfitability(project, resources);
@@ -141,7 +146,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
 
   const handleAiGenerateEstimate = async () => {
     if (!aiPrompt.trim()) return;
-    if (!hasApiKey()) { alert('Настройте API-ключ Groq в настройках (иконка шестерёнки вверху).'); return; }
+    if (!hasApiKey()) { alert('Настройте API-ключ AI в настройках (иконка шестерёнки вверху).'); return; }
     setIsGenerating(true);
     try {
       const result = await generateSmartEstimate(aiPrompt, resources);
@@ -156,7 +161,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
   };
 
   const handleWizardGenerate = async () => {
-    if (!hasApiKey()) { alert('Настройте API-ключ Groq в настройках (иконка шестерёнки вверху).'); return; }
+    if (!hasApiKey()) { alert('Настройте API-ключ AI в настройках (иконка шестерёнки вверху).'); return; }
     if (wizardData.area <= 0) { alert('Укажите площадь объекта.'); return; }
     setIsGenerating(true);
     try {
@@ -201,6 +206,145 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
 
   const handleDeletePayment = (id: string) => {
     onUpdate({ ...project, paymentSchedule: (project.paymentSchedule || []).filter(p => p.id !== id) });
+  };
+
+  // --- Contract handlers ---
+  const kpTotal = useMemo(() =>
+    (project.clientEstimateItems || []).reduce((s, i) => s + i.totalPrice, 0),
+    [project.clientEstimateItems]
+  );
+
+  const handleSignContract = () => {
+    const price = kpTotal > 0 ? kpTotal : project.contractPrice;
+    const contractDoc = {
+      id: generateId(),
+      name: `Договор от ${formatDate(Date.now())}`,
+      type: 'contract' as const,
+      date: Date.now(),
+      signStatus: 'signed' as const,
+    };
+    const sysMsg = {
+      id: generateId(), sender: 'Система', role: 'manager' as const,
+      text: `Договор подписан на сумму ${formatPrice(price)}`, timestamp: Date.now(), isSystem: true,
+    };
+    onUpdate({
+      ...project,
+      contractPrice: price,
+      contractSignedAt: Date.now(),
+      documents: [...(project.documents || []), contractDoc],
+      chat: [...(project.chat || []), sysMsg],
+    });
+  };
+
+  const handleAddAmendment = () => {
+    const newPrice = Number(amendmentPrice);
+    if (!newPrice || !amendmentReason.trim()) return;
+    const amendment: ContractAmendment = {
+      id: generateId(),
+      date: Date.now(),
+      previousPrice: project.contractPrice,
+      newPrice,
+      reason: amendmentReason.trim(),
+    };
+    const sysMsg = {
+      id: generateId(), sender: 'Система', role: 'manager' as const,
+      text: `Допсоглашение: сумма договора изменена ${formatPrice(project.contractPrice)} → ${formatPrice(newPrice)}. Причина: ${amendmentReason.trim()}`,
+      timestamp: Date.now(), isSystem: true,
+    };
+    onUpdate({
+      ...project,
+      contractPrice: newPrice,
+      contractAmendments: [...(project.contractAmendments || []), amendment],
+      chat: [...(project.chat || []), sysMsg],
+    });
+    setShowAmendmentForm(false);
+    setAmendmentPrice('');
+    setAmendmentReason('');
+  };
+
+  const handleCreateScheduleFromContract = () => {
+    const half = Math.round(project.contractPrice / 2);
+    const schedule: PaymentScheduleItem[] = [
+      { id: generateId(), stage: 'Предоплата 50%', amount: half, percentage: 50, status: 'upcoming' },
+      { id: generateId(), stage: 'Окончательный расчёт 50%', amount: project.contractPrice - half, percentage: 50, status: 'upcoming' },
+    ];
+    onUpdate({ ...project, paymentSchedule: schedule });
+  };
+
+  // --- Milestone handlers ---
+  const handleAddMilestone = () => {
+    const milestones = project.milestones || [];
+    const newMs = {
+      id: generateId(),
+      title: 'Новый этап',
+      description: '',
+      status: 'pending' as const,
+      sortOrder: milestones.length,
+    };
+    onUpdate({ ...project, milestones: [...milestones, newMs] });
+  };
+
+  const handleUpdateMilestone = (id: string, updates: Partial<typeof project.milestones[0]>) => {
+    const updated = (project.milestones || []).map(m =>
+      m.id === id ? { ...m, ...updates } : m
+    );
+    onUpdate({ ...project, milestones: updated });
+  };
+
+  const handleDeleteMilestone = (id: string) => {
+    const filtered = (project.milestones || []).filter(m => m.id !== id);
+    const reindexed = filtered.map((m, i) => ({ ...m, sortOrder: i }));
+    const completedCount = reindexed.filter(m => m.status === 'completed').length;
+    const progress = reindexed.length > 0 ? Math.round((completedCount / reindexed.length) * 100) : 0;
+    onUpdate({ ...project, milestones: reindexed, progress });
+  };
+
+  const handleMoveMilestone = (id: string, direction: 'up' | 'down') => {
+    const sorted = [...(project.milestones || [])].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    const idx = sorted.findIndex(m => m.id === id);
+    if (idx < 0) return;
+    if (direction === 'up' && idx === 0) return;
+    if (direction === 'down' && idx === sorted.length - 1) return;
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    [sorted[idx], sorted[swapIdx]] = [sorted[swapIdx], sorted[idx]];
+    const reindexed = sorted.map((m, i) => ({ ...m, sortOrder: i }));
+    onUpdate({ ...project, milestones: reindexed });
+  };
+
+  const handleSetMilestoneStatus = (id: string, status: 'pending' | 'current' | 'completed') => {
+    const milestones = (project.milestones || []).map(m =>
+      m.id === id ? { ...m, status, date: status === 'completed' ? Date.now() : m.date } : m
+    );
+    const completedCount = milestones.filter(m => m.status === 'completed').length;
+    const progress = milestones.length > 0 ? Math.round((completedCount / milestones.length) * 100) : 0;
+    onUpdate({ ...project, milestones, progress });
+  };
+
+  const handleGenerateMilestones = async () => {
+    const kpItems = project.clientEstimateItems || [];
+    if (kpItems.length === 0 || isGeneratingMilestones) return;
+    setIsGeneratingMilestones(true);
+    try {
+      const aiMilestones = await generateMilestonesAI(
+        kpItems.map(item => ({ name: item.name, unit: item.unit, quantity: item.quantity, section: item.section })),
+        project.areaSize,
+        project.name
+      );
+      const newMilestones = aiMilestones.map((m, i) => ({
+        id: generateId(),
+        title: m.title,
+        description: m.description || '',
+        status: (i === 0 ? 'current' : 'pending') as 'pending' | 'current' | 'completed',
+        sortOrder: i,
+      }));
+      const completedCount = newMilestones.filter(m => m.status === 'completed').length;
+      const progress = newMilestones.length > 0 ? Math.round((completedCount / newMilestones.length) * 100) : 0;
+      onUpdate({ ...project, milestones: newMilestones, progress });
+    } catch (e: any) {
+      alert(e.message || 'Ошибка генерации этапов');
+    } finally {
+      setIsGeneratingMilestones(false);
+    }
   };
 
   const handleToggleCategory = (cat: ServiceCategory) => {
@@ -334,7 +478,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
       return;
     }
     if (!hasApiKey()) {
-      alert('Для ИИ-генерации КП настройте API-ключ Groq в разделе «AI Проверка».');
+      alert('Для ИИ-генерации КП настройте API-ключ AI в настройках (иконка шестерёнки вверху).');
       return;
     }
 
@@ -367,7 +511,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
         .filter(Boolean)
         .join('\n');
 
-      const result = await generateClientEstimateAI(internalItems, catalogWithPrices, area, clientMarginPercent);
+      const result = await generateClientEstimateAI(internalItems, catalogWithPrices, area, clientMarginPercent, loadPricingRules());
 
       // Преобразуем в ClientEstimateItem[]
       const generated: ClientEstimateItem[] = result.map((item, i) => {
@@ -597,18 +741,24 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
 
                                 {/* Строка 2: Цена × Кол-во = Подытог + Удалить */}
                                 <div className="flex items-center gap-2 flex-wrap">
-                                  <input type="number"
-                                    className="w-24 bg-white border-slate-200 border p-1.5 rounded-lg outline-none text-right focus:ring-2 focus:ring-orange-500 text-sm"
-                                    value={unitPrice}
-                                    onChange={(e) => handleUpdateItem(originalIdx, { customPrice: Number(e.target.value) })}
-                                  />
-                                  <span className="text-slate-300 text-sm">×</span>
-                                  <input type="number"
-                                    className="w-20 bg-white border-slate-200 border p-1.5 rounded-lg outline-none text-right focus:ring-2 focus:ring-orange-500 text-sm"
-                                    value={item.quantity}
-                                    onChange={(e) => handleUpdateItem(originalIdx, { quantity: Number(e.target.value) })}
-                                  />
-                                  <span className="text-xs text-slate-400 font-medium">{displayUnit}</span>
+                                  <div className="flex flex-col">
+                                    <span className="text-[9px] text-slate-400 mb-0.5">Цена</span>
+                                    <input type="number"
+                                      className="w-24 bg-white border-slate-200 border p-1.5 rounded-lg outline-none text-right focus:ring-2 focus:ring-orange-500 text-sm"
+                                      value={unitPrice}
+                                      onChange={(e) => handleUpdateItem(originalIdx, { customPrice: Number(e.target.value) })}
+                                    />
+                                  </div>
+                                  <span className="text-slate-300 text-sm mt-3.5">×</span>
+                                  <div className="flex flex-col">
+                                    <span className="text-[9px] text-slate-400 mb-0.5">Кол-во</span>
+                                    <input type="number"
+                                      className="w-20 bg-white border-slate-200 border p-1.5 rounded-lg outline-none text-right focus:ring-2 focus:ring-orange-500 text-sm"
+                                      value={item.quantity}
+                                      onChange={(e) => handleUpdateItem(originalIdx, { quantity: Number(e.target.value) })}
+                                    />
+                                  </div>
+                                  <span className="text-xs text-slate-400 font-medium mt-3.5">{displayUnit}</span>
                                   <span className="text-slate-300 text-sm">=</span>
                                   <span className="font-black text-slate-800 ml-auto">{formatPrice(item.totalCost)}</span>
                                   <button onClick={() => handleDeleteItem(originalIdx)}
@@ -762,27 +912,29 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
               {/* Left column: КП items */}
               <div className="lg:col-span-2 space-y-4">
                 {/* Auto-generate button */}
-                <section className="bg-slate-900 rounded-xl p-4 shadow-lg flex flex-col sm:flex-row items-center gap-4">
-                  <div className="flex-1">
-                    <h3 className="text-white font-bold text-sm flex items-center gap-2"><Sparkles size={16} className="text-orange-400" /> ИИ-генерация КП</h3>
-                    <p className="text-slate-400 text-xs mt-1">ИИ подберёт работы из каталога, применит цены из прайс-листа и наценку</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-slate-400 text-xs">Наценка</span>
-                      <input type="number" className="w-16 bg-slate-800 border border-slate-700 text-white text-sm rounded-lg px-2 py-1.5 text-center outline-none focus:ring-2 focus:ring-orange-500"
-                        value={clientMarginPercent} onChange={(e) => setClientMarginPercent(Number(e.target.value))} min={0} max={200}
-                        disabled={isGeneratingKP} />
-                      <span className="text-slate-400 text-xs">%</span>
+                <section className="bg-slate-900 rounded-xl shadow-lg overflow-hidden">
+                  <div className="p-4 flex flex-col sm:flex-row items-center gap-4">
+                    <div className="flex-1">
+                      <h3 className="text-white font-bold text-sm flex items-center gap-2"><Sparkles size={16} className="text-orange-400" /> ИИ-генерация КП</h3>
+                      <p className="text-slate-400 text-xs mt-1">ИИ подберёт работы из каталога, применит цены из прайс-листа и наценку</p>
                     </div>
-                    <button onClick={handleGenerateClientEstimate} disabled={isGeneratingKP}
-                      className="bg-orange-600 hover:bg-orange-500 disabled:bg-slate-700 text-white text-xs font-bold px-4 py-2 rounded-lg transition-colors whitespace-nowrap flex items-center gap-2">
-                      {isGeneratingKP ? (
-                        <><Loader2 size={14} className="animate-spin" /> Генерация...</>
-                      ) : (
-                        <><Sparkles size={14} /> Сформировать</>
-                      )}
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-400 text-xs">Наценка</span>
+                        <input type="number" className="w-16 bg-slate-800 border border-slate-700 text-white text-sm rounded-lg px-2 py-1.5 text-center outline-none focus:ring-2 focus:ring-orange-500"
+                          value={clientMarginPercent} onChange={(e) => setClientMarginPercent(Number(e.target.value))} min={0} max={200}
+                          disabled={isGeneratingKP} />
+                        <span className="text-slate-400 text-xs">%</span>
+                      </div>
+                      <button onClick={handleGenerateClientEstimate} disabled={isGeneratingKP}
+                        className="bg-orange-600 hover:bg-orange-500 disabled:bg-slate-700 text-white text-xs font-bold px-4 py-2 rounded-lg transition-colors whitespace-nowrap flex items-center gap-2">
+                        {isGeneratingKP ? (
+                          <><Loader2 size={14} className="animate-spin" /> Генерация...</>
+                        ) : (
+                          <><Sparkles size={14} /> Сформировать</>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </section>
 
@@ -1278,32 +1430,131 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
             )}
           </section>
 
-          {/* Milestones overview */}
+          {/* Milestones management */}
           <section className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-            <h3 className="text-lg font-bold text-slate-800 mb-4">Этапы проекта</h3>
-            <div className="space-y-3">
-              {(project.milestones || []).map(ms => (
-                <div key={ms.id} className={`flex items-center gap-4 p-3 rounded-xl border ${
-                  ms.status === 'completed' ? 'bg-green-50 border-green-200' :
-                  ms.status === 'current' ? 'bg-orange-50 border-orange-200' : 'bg-slate-50 border-slate-100'
-                }`}>
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                    ms.status === 'completed' ? 'bg-green-500 text-white' :
-                    ms.status === 'current' ? 'bg-orange-500 text-white' : 'bg-slate-200 text-slate-400'
-                  }`}>
-                    {ms.status === 'completed' ? <Check size={16} /> : ms.status === 'current' ? <Clock size={16} /> : <span className="text-xs font-bold">...</span>}
-                  </div>
-                  <div className="flex-1">
-                    <p className="font-bold text-slate-800 text-sm">{ms.title}</p>
-                    <p className="text-xs text-slate-500">{ms.description}</p>
-                  </div>
-                  {ms.date && <span className="text-xs text-slate-400">{formatDate(ms.date)}</span>}
-                  {ms.completionPhoto && (
-                    <img src={ms.completionPhoto} alt="" className="w-10 h-10 rounded-lg object-cover cursor-pointer" onClick={() => setFullscreenPhoto(ms.completionPhoto!)} />
-                  )}
-                </div>
-              ))}
+            <div className="flex justify-between items-center mb-5">
+              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <Clock size={20} className="text-orange-500" /> Этапы проекта
+              </h3>
+              <div className="flex items-center gap-2">
+                {(project.clientEstimateItems || []).length > 0 && hasApiKey() && (
+                  <button onClick={handleGenerateMilestones} disabled={isGeneratingMilestones}
+                    className="bg-violet-600 hover:bg-violet-500 disabled:bg-violet-400 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors">
+                    {isGeneratingMilestones ? <><Loader2 size={14} className="animate-spin" /> Генерация...</> : <><Sparkles size={14} /> Сгенерировать из КП</>}
+                  </button>
+                )}
+                <button onClick={handleAddMilestone}
+                  className="bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1 hover:bg-black transition-colors">
+                  <Plus size={14} /> Добавить этап
+                </button>
+              </div>
             </div>
+
+            {(project.milestones || []).length === 0 ? (
+              <div className="text-center py-10 text-slate-400">
+                <Clock size={36} className="mx-auto mb-2 opacity-30" />
+                <p className="text-sm">Этапы не заданы. Добавьте первый этап.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {[...(project.milestones || [])]
+                  .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+                  .map((ms, idx, arr) => (
+                  <div key={ms.id} className={`p-4 rounded-xl border ${
+                    ms.status === 'completed' ? 'bg-green-50 border-green-200' :
+                    ms.status === 'current' ? 'bg-orange-50 border-orange-200' :
+                    'border-slate-200'
+                  }`}>
+                    <div className="flex gap-3 items-start">
+                      {/* Number + Reorder arrows */}
+                      <div className="flex items-center gap-1 flex-shrink-0 pt-1">
+                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold ${
+                          ms.status === 'completed' ? 'bg-green-500' :
+                          ms.status === 'current' ? 'bg-orange-500' : 'bg-slate-300'
+                        }`}>
+                          {ms.status === 'completed' ? <Check size={14} /> : idx + 1}
+                        </div>
+                        <div className="flex flex-col">
+                          <button onClick={() => handleMoveMilestone(ms.id, 'up')} disabled={idx === 0}
+                            className="text-slate-300 hover:text-slate-600 disabled:opacity-20 transition-colors p-0.5">
+                            <ChevronUp size={13} />
+                          </button>
+                          <button onClick={() => handleMoveMilestone(ms.id, 'down')} disabled={idx === arr.length - 1}
+                            className="text-slate-300 hover:text-slate-600 disabled:opacity-20 transition-colors p-0.5">
+                            <ChevronDown size={13} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Editable fields */}
+                      <div className="flex-1 grid grid-cols-1 sm:grid-cols-4 gap-2">
+                        <div className="sm:col-span-2">
+                          <label className="text-[9px] font-bold text-slate-400 uppercase block mb-0.5">Название</label>
+                          <input type="text"
+                            className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:ring-2 focus:ring-orange-500 font-bold bg-white"
+                            value={ms.title}
+                            onChange={(e) => handleUpdateMilestone(ms.id, { title: e.target.value })} />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-bold text-slate-400 uppercase block mb-0.5">Статус</label>
+                          <select
+                            className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-orange-500 bg-white"
+                            value={ms.status}
+                            onChange={(e) => handleSetMilestoneStatus(ms.id, e.target.value as 'pending' | 'current' | 'completed')}>
+                            <option value="pending">Ожидает</option>
+                            <option value="current">Текущий</option>
+                            <option value="completed">Завершён</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-bold text-slate-400 uppercase block mb-0.5">План. дата</label>
+                          <input type="date"
+                            className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-orange-500 bg-white"
+                            value={ms.plannedDate ? new Date(ms.plannedDate).toISOString().slice(0, 10) : ''}
+                            onChange={(e) => handleUpdateMilestone(ms.id, {
+                              plannedDate: e.target.value ? new Date(e.target.value).getTime() : undefined
+                            })} />
+                        </div>
+                      </div>
+
+                      {/* Delete */}
+                      <button onClick={() => handleDeleteMilestone(ms.id)}
+                        className="text-slate-300 hover:text-red-500 transition-colors p-1 flex-shrink-0 mt-1">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+
+                    {/* Description row */}
+                    <div className="mt-2 ml-[52px]">
+                      <input type="text"
+                        placeholder="Описание этапа..."
+                        className="w-full border border-slate-100 rounded-lg px-2.5 py-1 text-xs text-slate-500 outline-none focus:ring-1 focus:ring-orange-500 bg-transparent"
+                        value={ms.description}
+                        onChange={(e) => handleUpdateMilestone(ms.id, { description: e.target.value })} />
+                    </div>
+
+                    {/* Completion info */}
+                    {ms.status === 'completed' && ms.date && (
+                      <div className="mt-2 ml-[52px] flex items-center gap-2 text-[10px] text-green-600">
+                        <Check size={12} /> Завершён {formatDate(ms.date)}
+                        {ms.completionPhoto && (
+                          <img src={ms.completionPhoto} alt="" className="w-8 h-8 rounded object-cover cursor-pointer"
+                            onClick={() => setFullscreenPhoto(ms.completionPhoto!)} />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Progress summary */}
+            {(project.milestones || []).length > 0 && (
+              <div className="mt-4 p-3 rounded-lg text-sm font-medium bg-slate-50 text-slate-600 flex justify-between items-center">
+                <span>Прогресс: {(project.milestones || []).filter(m => m.status === 'completed').length} из {(project.milestones || []).length} этапов</span>
+                <span className="font-bold text-orange-600">{project.progress}%</span>
+              </div>
+            )}
           </section>
 
           {/* Photos gallery */}
@@ -1474,6 +1725,114 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
       {/* === PAYMENTS TAB === */}
       {activeTab === 'payments' && (
         <div className="space-y-6">
+
+          {/* Contract block */}
+          <section className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-4">
+              <FileText size={20} className="text-blue-500" /> Договор
+            </h3>
+
+            {project.contractSignedAt ? (
+              <>
+                {/* Signed contract info */}
+                <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold text-green-600 uppercase">Договор подписан</p>
+                    <p className="text-2xl font-black text-slate-900 mt-1">{formatPrice(project.contractPrice)}</p>
+                    <p className="text-xs text-slate-500 mt-0.5">от {formatDate(project.contractSignedAt)}</p>
+                  </div>
+                  <button
+                    onClick={() => { setShowAmendmentForm(!showAmendmentForm); setAmendmentPrice(String(project.contractPrice)); }}
+                    className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors shrink-0"
+                  >
+                    <FileText size={14} /> Допсоглашение
+                  </button>
+                </div>
+
+                {/* Amendment form */}
+                {showAmendmentForm && (
+                  <div className="mt-3 bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
+                    <p className="text-xs font-bold text-blue-700">Новое допсоглашение</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Новая сумма договора</label>
+                        <input type="number" className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 font-bold"
+                          value={amendmentPrice} onChange={e => setAmendmentPrice(e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Причина изменения</label>
+                        <input type="text" placeholder="Дополнительные работы, изменение объёмов..."
+                          className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          value={amendmentReason} onChange={e => setAmendmentReason(e.target.value)} />
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={handleAddAmendment} disabled={!amendmentPrice || !amendmentReason.trim()}
+                        className="bg-blue-600 hover:bg-blue-500 disabled:bg-blue-300 text-white px-4 py-2 rounded-lg text-xs font-bold transition-colors">
+                        Сохранить
+                      </button>
+                      <button onClick={() => setShowAmendmentForm(false)}
+                        className="text-slate-400 hover:text-slate-600 px-4 py-2 text-xs font-bold transition-colors">
+                        Отмена
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Amendments history */}
+                {(project.contractAmendments || []).length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase">История допсоглашений</p>
+                    {(project.contractAmendments || []).map(a => (
+                      <div key={a.id} className="bg-slate-50 rounded-lg p-3 flex items-center justify-between text-sm">
+                        <div>
+                          <span className="text-slate-500">{formatDate(a.date)}</span>
+                          <span className="mx-2 text-slate-300">|</span>
+                          <span className="line-through text-red-400">{formatPrice(a.previousPrice)}</span>
+                          <span className="mx-1.5 text-slate-400">&rarr;</span>
+                          <span className="font-bold text-green-700">{formatPrice(a.newPrice)}</span>
+                        </div>
+                        <span className="text-xs text-slate-400 max-w-[200px] truncate ml-3" title={a.reason}>{a.reason}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (project.clientEstimateItems || []).length > 0 && project.estimateIssuedAt ? (
+              /* KP issued but contract not signed */
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold text-amber-600 uppercase">КП выставлено</p>
+                  <p className="text-2xl font-black text-slate-900 mt-1">{formatPrice(kpTotal)}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Договор ещё не подписан</p>
+                </div>
+                <button onClick={handleSignContract}
+                  className="bg-green-600 hover:bg-green-500 text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-colors shrink-0 shadow-lg shadow-green-600/20">
+                  <Check size={16} /> Подписать договор
+                </button>
+              </div>
+            ) : (
+              /* No KP - manual contract price */
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                <p className="text-xs font-bold text-slate-400 uppercase mb-2">Сумма контракта (ручной ввод)</p>
+                <div className="flex gap-3 items-end">
+                  <input type="number" className="flex-1 border border-slate-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-orange-500 font-bold"
+                    value={project.contractPrice} onChange={e => onUpdate({ ...project, contractPrice: Number(e.target.value) })} />
+                  {project.contractPrice > 0 && !project.contractSignedAt && (
+                    <button onClick={() => {
+                      onUpdate({ ...project, contractSignedAt: Date.now(), documents: [...(project.documents || []), {
+                        id: generateId(), name: `Договор от ${formatDate(Date.now())}`, type: 'contract' as const, date: Date.now(), signStatus: 'signed' as const,
+                      }]});
+                    }}
+                      className="bg-green-600 hover:bg-green-500 text-white px-4 py-2.5 rounded-lg font-bold text-xs transition-colors shrink-0">
+                      Зафиксировать
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </section>
+
           {/* Summary */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
@@ -1499,10 +1858,18 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
               <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                 <CreditCard className="text-blue-500" /> График оплаты
               </h3>
-              <button onClick={handleAddPayment}
-                className="bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1 hover:bg-black transition-colors">
-                <Plus size={14} /> Добавить этап
-              </button>
+              <div className="flex items-center gap-2">
+                {project.contractPrice > 0 && (project.paymentSchedule || []).length === 0 && (
+                  <button onClick={handleCreateScheduleFromContract}
+                    className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors">
+                    <Sparkles size={14} /> Создать график
+                  </button>
+                )}
+                <button onClick={handleAddPayment}
+                  className="bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1 hover:bg-black transition-colors">
+                  <Plus size={14} /> Добавить этап
+                </button>
+              </div>
             </div>
 
             {(project.paymentSchedule || []).length === 0 ? (

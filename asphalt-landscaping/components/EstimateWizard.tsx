@@ -204,19 +204,68 @@ export const EstimateWizard: React.FC<EstimateWizardProps> = ({ data, onChange, 
               value={data.asphaltMethod} onChange={v => update('asphaltMethod', v)} />
           </div>
           <div>
-            <SectionLabel>Толщина слоя</SectionLabel>
-            <ThicknessInput value={data.asphaltThickness} onChange={v => update('asphaltThickness', v)} presets={[30, 40, 50, 60, 80]} />
+            <SectionLabel>Количество слоёв</SectionLabel>
+            <PillGroup options={[{ value: 1 as const, label: '1 слой' }, { value: 2 as const, label: '2 слоя (к/з + м/з)' }]}
+              value={data.asphaltLayers} onChange={v => update('asphaltLayers', v)} />
           </div>
-          <div>
-            <SectionLabel>Тип смеси</SectionLabel>
-            <PillGroup options={[
-              { value: 'fine_B2' as const, label: 'Мелкозерн. Б-II' },
-              { value: 'coarse_A1' as const, label: 'Крупнозерн. А-I' },
-              { value: 'sand_D' as const, label: 'Песчаная Д-II' },
-              { value: 'SMA15' as const, label: 'ЩМА-15' },
-            ]}
-              value={data.asphaltMixType} onChange={v => update('asphaltMixType', v)} />
-          </div>
+
+          {data.asphaltLayers === 2 ? (
+            <>
+              {/* Нижний слой */}
+              <div className="border border-slate-700 rounded-lg p-3 space-y-2">
+                <p className="text-[10px] font-bold text-orange-300 uppercase tracking-widest">Нижний слой (к/з)</p>
+                <div>
+                  <SectionLabel>Толщина</SectionLabel>
+                  <ThicknessInput value={data.asphaltBottomThickness} onChange={v => update('asphaltBottomThickness', v)} presets={[40, 50, 60, 80]} />
+                </div>
+                <div>
+                  <SectionLabel>Тип смеси</SectionLabel>
+                  <PillGroup options={[
+                    { value: 'coarse_A1' as const, label: 'Крупнозерн. А-I' },
+                    { value: 'fine_B2' as const, label: 'Мелкозерн. Б-II' },
+                    { value: 'sand_D' as const, label: 'Песчаная Д-II' },
+                    { value: 'SMA15' as const, label: 'ЩМА-15' },
+                  ]}
+                    value={data.asphaltBottomMixType} onChange={v => update('asphaltBottomMixType', v)} />
+                </div>
+              </div>
+              {/* Верхний слой */}
+              <div className="border border-slate-700 rounded-lg p-3 space-y-2">
+                <p className="text-[10px] font-bold text-orange-300 uppercase tracking-widest">Верхний слой (м/з)</p>
+                <div>
+                  <SectionLabel>Толщина</SectionLabel>
+                  <ThicknessInput value={data.asphaltThickness} onChange={v => update('asphaltThickness', v)} presets={[30, 40, 50, 60]} />
+                </div>
+                <div>
+                  <SectionLabel>Тип смеси</SectionLabel>
+                  <PillGroup options={[
+                    { value: 'fine_B2' as const, label: 'Мелкозерн. Б-II' },
+                    { value: 'coarse_A1' as const, label: 'Крупнозерн. А-I' },
+                    { value: 'sand_D' as const, label: 'Песчаная Д-II' },
+                    { value: 'SMA15' as const, label: 'ЩМА-15' },
+                  ]}
+                    value={data.asphaltMixType} onChange={v => update('asphaltMixType', v)} />
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <SectionLabel>Толщина слоя</SectionLabel>
+                <ThicknessInput value={data.asphaltThickness} onChange={v => update('asphaltThickness', v)} presets={[30, 40, 50, 60, 80]} />
+              </div>
+              <div>
+                <SectionLabel>Тип смеси</SectionLabel>
+                <PillGroup options={[
+                  { value: 'fine_B2' as const, label: 'Мелкозерн. Б-II' },
+                  { value: 'coarse_A1' as const, label: 'Крупнозерн. А-I' },
+                  { value: 'sand_D' as const, label: 'Песчаная Д-II' },
+                  { value: 'SMA15' as const, label: 'ЩМА-15' },
+                ]}
+                  value={data.asphaltMixType} onChange={v => update('asphaltMixType', v)} />
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -284,7 +333,14 @@ export const EstimateWizard: React.FC<EstimateWizardProps> = ({ data, onChange, 
       if (data.geotextileDensity > 0) parts.push(`геотекстиль ${data.geotextileDensity} г/м²`);
       items.push(`Основание: ${parts.join(', ') || 'без слоёв'}`);
     }
-    if (data.works.asphalt) items.push(`Асфальт ${MIX_LABELS[data.asphaltMixType] || data.asphaltMixType}, ${data.asphaltThickness} мм, ${data.asphaltMethod === 'paver' ? 'укладчиком' : 'вручную'}`);
+    if (data.works.asphalt) {
+      const method = data.asphaltMethod === 'paver' ? 'укладчиком' : 'вручную';
+      if (data.asphaltLayers === 2) {
+        items.push(`Асфальт 2 слоя: нижний — ${MIX_LABELS[data.asphaltBottomMixType] || data.asphaltBottomMixType} ${data.asphaltBottomThickness} мм + верхний — ${MIX_LABELS[data.asphaltMixType] || data.asphaltMixType} ${data.asphaltThickness} мм, ${method}`);
+      } else {
+        items.push(`Асфальт ${MIX_LABELS[data.asphaltMixType] || data.asphaltMixType}, ${data.asphaltThickness} мм, ${method}`);
+      }
+    }
     if (data.works.curbs) items.push(`Бордюры ${data.curbType === 'road' ? 'дорожные' : 'садовые'}, ${data.perimeterLength} п.м`);
     if (data.works.tiles) items.push(`Плитка ${data.tileThickness} мм`);
     if (data.works.landscaping) items.push(`Газон ${data.lawnType === 'seed' ? 'посевной' : 'рулонный'}`);

@@ -1,12 +1,13 @@
 
-import React, { useMemo, useEffect } from 'react';
+import React, { useMemo, useEffect, useState, useCallback } from 'react';
 import { Project, ClientEstimateItem, formatPrice, formatDate } from '../types';
-import { X, Printer, Send, FileText, Phone, Mail, MapPin, Ruler } from 'lucide-react';
+import { X, Printer, Send, FileText, Phone, Mail, MapPin, Ruler, Download, Share2, MessageCircle, Copy, Check } from 'lucide-react';
+import html2pdf from 'html2pdf.js';
 
 interface CommercialProposalProps {
   project: Project;
   onClose: () => void;
-  onIssue: () => void;
+  onIssue?: () => void;
 }
 
 interface SectionGroup {
@@ -37,12 +38,24 @@ const SECTION_ORDER = [
 ];
 
 export const CommercialProposal: React.FC<CommercialProposalProps> = ({ project, onClose, onIssue }) => {
+  const [showShareMenu, setShowShareMenu] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [savingPdf, setSavingPdf] = useState(false);
+
   // Escape для закрытия
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') { onClose(); setShowShareMenu(false); } };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
+
+  // Закрыть меню при клике вне
+  useEffect(() => {
+    if (!showShareMenu) return;
+    const handler = () => setShowShareMenu(false);
+    setTimeout(() => document.addEventListener('click', handler), 0);
+    return () => document.removeEventListener('click', handler);
+  }, [showShareMenu]);
 
   // Группировка позиций по разделам
   const groupedSections = useMemo(() => {
@@ -87,6 +100,59 @@ export const CommercialProposal: React.FC<CommercialProposalProps> = ({ project,
 
   const kpDate = formatDate(Date.now());
 
+  // Сохранить как PDF-файл
+  const handleSavePdf = useCallback(async () => {
+    const el = document.getElementById('kp-document');
+    if (!el || savingPdf) return;
+    setSavingPdf(true);
+    try {
+      await html2pdf().set({
+        margin: [10, 10, 10, 10],
+        filename: `КП_${project.name.replace(/[^а-яА-ЯёЁa-zA-Z0-9 ]/g, '').trim()}_${kpDate}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
+      }).from(el).save();
+    } catch (e) {
+      console.error('PDF save error:', e);
+    } finally {
+      setSavingPdf(false);
+    }
+  }, [project.name, kpDate, savingPdf]);
+
+  // Текст для шаринга
+  const shareText = useMemo(() => {
+    const lines = [
+      `Коммерческое предложение ${kpNumber}`,
+      `Объект: ${project.name}`,
+      project.address ? `Адрес: ${project.address}` : '',
+      `Итого: ${formatPrice(grandTotal)}`,
+      '',
+      `${COMPANY_INFO.name}`,
+      `Тел.: ${COMPANY_INFO.phone}`,
+    ];
+    return lines.filter(Boolean).join('\n');
+  }, [kpNumber, project.name, project.address, grandTotal]);
+
+  const handleShareWhatsApp = () => {
+    window.open(`https://wa.me/?text=${encodeURIComponent(shareText)}`, '_blank');
+  };
+  const handleShareTelegram = () => {
+    window.open(`https://t.me/share/url?url=${encodeURIComponent(' ')}&text=${encodeURIComponent(shareText)}`, '_blank');
+  };
+  const handleShareEmail = () => {
+    const subject = `Коммерческое предложение ${kpNumber} — ${project.name}`;
+    window.open(`mailto:${project.clientEmail || ''}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(shareText)}`, '_self');
+  };
+  const handleCopyText = async () => {
+    try {
+      await navigator.clipboard.writeText(shareText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* fallback */ }
+  };
+
   return (
     <>
       {/* Print styles */}
@@ -120,13 +186,53 @@ export const CommercialProposal: React.FC<CommercialProposalProps> = ({ project,
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
             <button onClick={() => window.print()}
-              className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 sm:px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-colors flex items-center gap-2">
-              <Printer size={16} /> <span className="hidden sm:inline">Печать /</span> PDF
+              className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 sm:px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-colors flex items-center gap-1.5">
+              <Printer size={16} /> <span className="hidden sm:inline">Печать</span>
             </button>
-            <button onClick={onIssue}
-              className="bg-orange-600 hover:bg-orange-500 text-white px-4 sm:px-6 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-colors flex items-center gap-2 shadow-lg shadow-orange-600/20">
-              <Send size={16} /> Выставить
+            <button onClick={handleSavePdf} disabled={savingPdf}
+              className="bg-blue-600 hover:bg-blue-500 disabled:bg-blue-400 text-white px-3 sm:px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-colors flex items-center gap-1.5 shadow-lg shadow-blue-600/20">
+              <Download size={16} /> {savingPdf ? 'Сохраняю...' : <><span className="hidden sm:inline">Сохранить</span> PDF</>}
             </button>
+            {/* Поделиться */}
+            <div className="relative">
+              <button onClick={(e) => { e.stopPropagation(); setShowShareMenu(!showShareMenu); }}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 sm:px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-colors flex items-center gap-1.5">
+                <Share2 size={16} /> <span className="hidden sm:inline">Поделиться</span>
+              </button>
+              {showShareMenu && (
+                <div className="absolute right-0 top-full mt-2 w-56 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-20" onClick={e => e.stopPropagation()}>
+                  <button onClick={handleShareWhatsApp}
+                    className="w-full px-4 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-green-50 hover:text-green-700 flex items-center gap-3 transition-colors">
+                    <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center"><MessageCircle size={16} className="text-green-600" /></div>
+                    WhatsApp
+                  </button>
+                  <button onClick={handleShareTelegram}
+                    className="w-full px-4 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-blue-50 hover:text-blue-700 flex items-center gap-3 transition-colors">
+                    <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center"><Send size={16} className="text-blue-600" /></div>
+                    Telegram
+                  </button>
+                  <button onClick={handleShareEmail}
+                    className="w-full px-4 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-violet-50 hover:text-violet-700 flex items-center gap-3 transition-colors">
+                    <div className="w-8 h-8 bg-violet-100 rounded-lg flex items-center justify-center"><Mail size={16} className="text-violet-600" /></div>
+                    Email
+                  </button>
+                  <div className="border-t border-slate-100 my-1" />
+                  <button onClick={handleCopyText}
+                    className="w-full px-4 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-3 transition-colors">
+                    <div className="w-8 h-8 bg-slate-100 rounded-lg flex items-center justify-center">
+                      {copied ? <Check size={16} className="text-green-600" /> : <Copy size={16} className="text-slate-500" />}
+                    </div>
+                    {copied ? 'Скопировано!' : 'Скопировать текст'}
+                  </button>
+                </div>
+              )}
+            </div>
+            {onIssue && (
+              <button onClick={onIssue}
+                className="bg-orange-600 hover:bg-orange-500 text-white px-4 sm:px-6 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-colors flex items-center gap-2 shadow-lg shadow-orange-600/20">
+                <Send size={16} /> Выставить
+              </button>
+            )}
           </div>
         </div>
 

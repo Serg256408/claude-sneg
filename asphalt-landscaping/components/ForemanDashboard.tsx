@@ -8,16 +8,17 @@ import {
 import {
   Camera, Plus, CheckCircle, Clock, MapPin, DollarSign, MessageSquare,
   ChevronRight, ListChecks, Image, FileText, CloudSun, Send, Trash2,
-  X, ChevronDown, AlertTriangle, Receipt, Users, Thermometer,
+  X, ChevronDown, AlertTriangle, Receipt, Users, Thermometer, BookOpen,
 } from 'lucide-react';
 import { ChatWidget } from './ChatWidget';
+import { ConstructionReference } from './ConstructionReference';
 
 interface ForemanDashboardProps {
   project: Project;
   onUpdateProject: (p: Project) => void;
 }
 
-type TabId = 'tasks' | 'photos' | 'expenses' | 'report' | 'chat';
+type TabId = 'tasks' | 'photos' | 'expenses' | 'report' | 'norms' | 'chat';
 
 export const ForemanDashboard: React.FC<ForemanDashboardProps> = ({ project, onUpdateProject }) => {
   const [activeTab, setActiveTab] = useState<TabId>('tasks');
@@ -47,6 +48,10 @@ export const ForemanDashboard: React.FC<ForemanDashboardProps> = ({ project, onU
 
   // --- Fullscreen photo viewer ---
   const [viewingPhoto, setViewingPhoto] = useState<ProjectPhoto | null>(null);
+
+  // --- Milestone completion ---
+  const [completingMilestoneId, setCompletingMilestoneId] = useState<string | null>(null);
+  const [completionPhotoDesc, setCompletionPhotoDesc] = useState('');
 
   // --- Computed ---
   const currentMilestone = project.milestones.find(m => m.status === 'current');
@@ -84,23 +89,86 @@ export const ForemanDashboard: React.FC<ForemanDashboardProps> = ({ project, onU
 
   // ========== HANDLERS ==========
 
-  const handleUpdateMilestone = (id: string, status: Milestone['status']) => {
-    const updatedMilestones = project.milestones.map(m =>
-      m.id === id ? { ...m, status, date: status === 'completed' ? Date.now() : m.date } : m
+  const handleCompleteMilestone = (id: string, withPhoto?: boolean) => {
+    const milestone = project.milestones.find(m => m.id === id);
+    if (!milestone) return;
+
+    // Создаём фото завершения этапа (если запрошено)
+    let newPhotos = [...(project.photos || [])];
+    let completionPhotoUrl: string | undefined;
+    if (withPhoto) {
+      completionPhotoUrl = `https://images.unsplash.com/photo-${1621275344335 + Math.floor(Math.random() * 1000000)}?auto=format&fit=crop&q=80&w=600`;
+      const newPhoto: ProjectPhoto = {
+        id: generateId(),
+        url: completionPhotoUrl,
+        description: completionPhotoDesc || `Завершение: ${milestone.title}`,
+        uploadedBy: 'foreman',
+        timestamp: Date.now(),
+        stage: milestone.title,
+        beforeAfter: 'after',
+        milestoneId: id,
+      };
+      newPhotos = [newPhoto, ...newPhotos];
+    }
+
+    let updatedMilestones = project.milestones.map(m =>
+      m.id === id ? { ...m, status: 'completed' as const, date: Date.now(), completionPhoto: completionPhotoUrl || m.completionPhoto } : m
     );
+
+    // Авто-переход: следующий pending становится current
+    const hasAnyCurrent = updatedMilestones.some(m => m.status === 'current');
+    if (!hasAnyCurrent) {
+      const sorted = [...updatedMilestones].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+      const nextPending = sorted.find(m => m.status === 'pending');
+      if (nextPending) {
+        updatedMilestones = updatedMilestones.map(m =>
+          m.id === nextPending.id ? { ...m, status: 'current' as const } : m
+        );
+      }
+    }
+
     const completedCount = updatedMilestones.filter(m => m.status === 'completed').length;
     const progress = Math.round((completedCount / updatedMilestones.length) * 100);
 
-    // Add system chat message
-    const milestone = project.milestones.find(m => m.id === id);
-    const sysMsg = status === 'completed' && milestone ? {
+    const sysMsg = {
       id: generateId(), sender: 'Система', role: 'foreman' as const,
       text: `Этап "${milestone.title}" завершён`, timestamp: Date.now(), isSystem: true,
-    } : null;
+    };
 
     onUpdateProject({
       ...project,
       milestones: updatedMilestones,
+      progress,
+      photos: newPhotos,
+      chat: [...(project.chat || []), sysMsg],
+    });
+
+    setCompletingMilestoneId(null);
+    setCompletionPhotoDesc('');
+  };
+
+  const handleSetMilestoneStatus = (id: string, status: Milestone['status']) => {
+    if (status === 'completed') {
+      // Для завершения используем панель с фото
+      setCompletingMilestoneId(id);
+      return;
+    }
+    const milestones = project.milestones.map(m =>
+      m.id === id ? { ...m, status, date: status === 'completed' ? Date.now() : m.date } : m
+    );
+    const completedCount = milestones.filter(m => m.status === 'completed').length;
+    const progress = milestones.length > 0 ? Math.round((completedCount / milestones.length) * 100) : 0;
+
+    const milestone = project.milestones.find(m => m.id === id);
+    const statusLabel = status === 'current' ? 'текущий' : 'ожидает';
+    const sysMsg = milestone ? {
+      id: generateId(), sender: 'Система', role: 'foreman' as const,
+      text: `Бригадир изменил статус этапа "${milestone.title}" → ${statusLabel}`, timestamp: Date.now(), isSystem: true,
+    } : null;
+
+    onUpdateProject({
+      ...project,
+      milestones,
       progress,
       chat: sysMsg ? [...(project.chat || []), sysMsg] : (project.chat || []),
     });
@@ -109,6 +177,8 @@ export const ForemanDashboard: React.FC<ForemanDashboardProps> = ({ project, onU
   // --- Photo ---
   const handlePhotoUpload = () => {
     const stage = photoForm.stage || currentMilestone?.title || 'Общее';
+    // Найти milestone по названию для привязки по ID
+    const linkedMilestone = project.milestones.find(m => m.title === stage) || currentMilestone;
     const newPhoto: ProjectPhoto = {
       id: generateId(),
       url: `https://images.unsplash.com/photo-${1621275344335 + Math.floor(Math.random() * 1000000)}?auto=format&fit=crop&q=80&w=600`,
@@ -117,7 +187,7 @@ export const ForemanDashboard: React.FC<ForemanDashboardProps> = ({ project, onU
       timestamp: Date.now(),
       stage,
       beforeAfter: photoForm.beforeAfter,
-      milestoneId: currentMilestone?.id,
+      milestoneId: linkedMilestone?.id,
     };
 
     const sysMsg = {
@@ -228,6 +298,7 @@ export const ForemanDashboard: React.FC<ForemanDashboardProps> = ({ project, onU
     { id: 'photos', label: 'Фото', icon: Image },
     { id: 'expenses', label: 'Расходы', icon: Receipt },
     { id: 'report', label: 'Отчёт', icon: CloudSun },
+    { id: 'norms', label: 'Нормы', icon: BookOpen },
     { id: 'chat', label: 'Чат', icon: MessageSquare },
   ];
 
@@ -365,32 +436,101 @@ export const ForemanDashboard: React.FC<ForemanDashboardProps> = ({ project, onU
             <section>
               <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">Этапы проекта</h3>
               <div className="space-y-3">
-                {project.milestones.map(m => (
-                  <div key={m.id} className={`bg-white p-4 rounded-2xl shadow-sm border-l-4 transition-all ${
-                    m.status === 'completed' ? 'border-green-500 opacity-70' :
-                    m.status === 'current' ? 'border-orange-500 ring-2 ring-orange-500/10' : 'border-slate-200'
-                  }`}>
-                    <div className="flex justify-between items-center">
-                      <div className="flex-1 min-w-0">
-                        <h4 className="font-bold text-slate-800 text-sm">{m.title}</h4>
-                        <p className="text-xs text-slate-500 mt-0.5">{m.description}</p>
-                        {m.date && <p className="text-[10px] text-green-600 mt-1">Завершён: {formatDate(m.date)}</p>}
+                {[...project.milestones].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)).map(m => {
+                  const msPhotos = (project.photos || []).filter(p => p.milestoneId === m.id || p.stage === m.title);
+                  const isCompleting = completingMilestoneId === m.id;
+
+                  return (
+                    <div key={m.id} className={`bg-white rounded-2xl shadow-sm border-l-4 transition-all overflow-hidden ${
+                      m.status === 'completed' ? 'border-green-500 opacity-80' :
+                      m.status === 'current' ? 'border-orange-500 ring-2 ring-orange-500/10' : 'border-slate-200'
+                    }`}>
+                      <div className="p-4">
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="flex-1 min-w-0">
+                            <h4 className="font-bold text-slate-800 text-sm">{m.title}</h4>
+                            <p className="text-xs text-slate-500 mt-0.5">{m.description}</p>
+                            {m.date && m.status === 'completed' && <p className="text-[10px] text-green-600 mt-1">Завершён: {formatDate(m.date)}</p>}
+                          </div>
+                          <select
+                            value={m.status}
+                            onChange={e => handleSetMilestoneStatus(m.id, e.target.value as Milestone['status'])}
+                            className={`shrink-0 text-xs font-bold rounded-lg px-2 py-1.5 outline-none border-2 transition-colors cursor-pointer ${
+                              m.status === 'completed' ? 'bg-green-50 border-green-300 text-green-700' :
+                              m.status === 'current' ? 'bg-orange-50 border-orange-300 text-orange-700' :
+                              'bg-slate-50 border-slate-200 text-slate-500'
+                            }`}
+                          >
+                            <option value="pending">Ожидает</option>
+                            <option value="current">Текущий</option>
+                            <option value="completed">Завершён</option>
+                          </select>
+                        </div>
+
+                        {/* Фото этапа */}
+                        {msPhotos.length > 0 && (
+                          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+                            {msPhotos.slice(0, 6).map(photo => (
+                              <img
+                                key={photo.id}
+                                src={photo.url}
+                                alt={photo.description}
+                                className="w-14 h-14 rounded-lg object-cover cursor-pointer hover:scale-105 transition-transform shrink-0 border-2 border-white shadow-sm"
+                                onClick={() => setViewingPhoto(photo)}
+                              />
+                            ))}
+                            {msPhotos.length > 6 && (
+                              <div className="w-14 h-14 rounded-lg bg-slate-100 flex items-center justify-center shrink-0 text-xs font-bold text-slate-400">
+                                +{msPhotos.length - 6}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Кнопка добавить фото к этапу */}
+                        {m.status !== 'completed' && !isCompleting && (
+                          <button
+                            onClick={() => {
+                              setPhotoForm({ ...photoForm, stage: m.title });
+                              setShowPhotoModal(true);
+                            }}
+                            className="mt-2 text-xs text-orange-500 font-bold flex items-center gap-1 hover:text-orange-600 transition-colors"
+                          >
+                            <Camera size={12} /> Добавить фото к этапу
+                          </button>
+                        )}
                       </div>
-                      {m.status === 'completed' ? (
-                        <div className="bg-green-100 text-green-600 p-1.5 rounded-full"><CheckCircle size={18} /></div>
-                      ) : m.status === 'current' ? (
-                        <button
-                          onClick={() => handleUpdateMilestone(m.id, 'completed')}
-                          className="bg-orange-100 text-orange-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-orange-200 active:scale-95 transition-all"
-                        >
-                          Завершить
-                        </button>
-                      ) : (
-                        <div className="text-slate-300"><Clock size={18} /></div>
+
+                      {/* Панель завершения этапа с фото */}
+                      {isCompleting && (
+                        <div className="bg-orange-50 border-t border-orange-200 p-4 space-y-3">
+                          <p className="text-xs font-bold text-orange-700">Прикрепите фото завершения (рекомендуется)</p>
+                          <input
+                            type="text"
+                            placeholder="Описание фото (опционально)"
+                            className="w-full border-2 border-orange-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-orange-500 bg-white"
+                            value={completionPhotoDesc}
+                            onChange={e => setCompletionPhotoDesc(e.target.value)}
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleCompleteMilestone(m.id, true)}
+                              className="flex-1 bg-orange-600 text-white py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 hover:bg-orange-500 active:scale-95 transition-all"
+                            >
+                              <Camera size={14} /> С фото
+                            </button>
+                            <button
+                              onClick={() => handleCompleteMilestone(m.id, false)}
+                              className="flex-1 bg-slate-200 text-slate-600 py-2.5 rounded-xl font-bold text-xs hover:bg-slate-300 active:scale-95 transition-all"
+                            >
+                              Без фото
+                            </button>
+                          </div>
+                        </div>
                       )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
           </div>
@@ -666,6 +806,10 @@ export const ForemanDashboard: React.FC<ForemanDashboardProps> = ({ project, onU
         )}
 
         {/* ========== TAB: CHAT ========== */}
+        {activeTab === 'norms' && (
+          <ConstructionReference theme="dark" />
+        )}
+
         {activeTab === 'chat' && (
           <div className="-mx-4">
             <ChatWidget

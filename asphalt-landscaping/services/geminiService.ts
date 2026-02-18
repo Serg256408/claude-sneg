@@ -1,28 +1,65 @@
 
 import { Project, Resource } from "../types";
 import { loadKnowledgeSections, assembleSystemPrompt } from './knowledgeBaseService';
+import {
+  PROMPT_PROFITABILITY_SYSTEM, buildProfitabilityUserPrompt,
+  PROMPT_CLIENT_SUMMARY_SYSTEM, buildClientSummaryUserPrompt,
+  PROMPT_CLIENT_ESTIMATE_SYSTEM, buildClientEstimateUserPrompt,
+  PROMPT_MILESTONES_SYSTEM, buildMilestonesUserPrompt,
+} from './prompts';
 
-// API-ключ Groq хранится в localStorage
-const STORAGE_KEY = 'asphalt_groq_api_key';
+// ═══ Мульти-провайдер AI: xAI Grok + Groq ═══
 
-export const getApiKey = (): string => localStorage.getItem(STORAGE_KEY) || '';
-export const setApiKey = (key: string) => localStorage.setItem(STORAGE_KEY, key);
+export type AIProvider = 'grok' | 'groq';
+
+const PROVIDER_KEY = 'asphalt_ai_provider';
+const GROK_KEY_STORAGE = 'asphalt_grok_api_key';
+const GROQ_KEY_STORAGE = 'asphalt_groq_api_key';
+
+// Провайдер
+export const getProvider = (): AIProvider => (localStorage.getItem(PROVIDER_KEY) as AIProvider) || 'grok';
+export const setProvider = (p: AIProvider) => localStorage.setItem(PROVIDER_KEY, p);
+
+// API-ключи: localStorage → .env (зашитый при сборке)
+export const getGrokKey = (): string => localStorage.getItem(GROK_KEY_STORAGE) || process.env.GROK_API_KEY || '';
+export const setGrokKey = (key: string) => localStorage.setItem(GROK_KEY_STORAGE, key);
+
+export const getGroqKey = (): string => localStorage.getItem(GROQ_KEY_STORAGE) || '';
+export const setGroqKey = (key: string) => localStorage.setItem(GROQ_KEY_STORAGE, key);
+
+// Общие геттеры для текущего провайдера
+export const getApiKey = (): string => getProvider() === 'grok' ? getGrokKey() : getGroqKey();
+export const setApiKey = (key: string) => getProvider() === 'grok' ? setGrokKey(key) : setGroqKey(key);
 export const hasApiKey = (): boolean => !!getApiKey();
 
-const GROQ_MODEL = 'meta-llama/llama-4-maverick-17b-128e-instruct';
+const PROVIDERS = {
+  grok: {
+    url: 'https://api.x.ai/v1/chat/completions',
+    model: 'grok-3-mini',
+    name: 'xAI Grok',
+  },
+  groq: {
+    url: 'https://api.groq.com/openai/v1/chat/completions',
+    model: 'llama-3.3-70b-versatile',
+    name: 'Groq',
+  },
+};
 
-const callGroq = async (systemPrompt: string, userMessage: string, jsonMode = false, maxTokens = 2048): Promise<string> => {
+const callAI = async (systemPrompt: string, userMessage: string, jsonMode = false, maxTokens = 2048): Promise<string> => {
+  const provider = getProvider();
   const apiKey = getApiKey();
-  if (!apiKey) throw new Error('API-ключ Groq не настроен. Нажмите шестерёнку вверху.');
+  const config = PROVIDERS[provider];
 
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+  if (!apiKey) throw new Error(`API-ключ ${config.name} не настроен. Нажмите шестерёнку вверху.`);
+
+  const response = await fetch(config.url, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: GROQ_MODEL,
+      model: config.model,
       messages: [
         { role: 'system', content: systemPrompt + (jsonMode ? '\nОтвечай СТРОГО в формате JSON, без markdown-обёртки, без пояснений.' : '') },
         { role: 'user', content: userMessage },
@@ -35,9 +72,10 @@ const callGroq = async (systemPrompt: string, userMessage: string, jsonMode = fa
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
-    if (response.status === 401) throw new Error('Неверный API-ключ Groq. Проверьте ключ в настройках.');
-    if (response.status === 429) throw new Error('Превышен лимит запросов Groq. Подождите минуту.');
-    throw new Error(err.error?.message || `Ошибка Groq API: ${response.status}`);
+    if (response.status === 401) throw new Error(`Неверный API-ключ ${config.name}. Проверьте ключ в настройках.`);
+    if (response.status === 403) throw new Error(`Нет доступа к ${config.name} API. Проверьте баланс/лицензию на аккаунте.`);
+    if (response.status === 429) throw new Error(`Превышен лимит запросов ${config.name}. Подождите минуту.`);
+    throw new Error(err.error?.message || `Ошибка ${config.name} API: ${response.status}`);
   }
 
   const data = await response.json();
@@ -46,15 +84,17 @@ const callGroq = async (systemPrompt: string, userMessage: string, jsonMode = fa
 
 export const generateClientSummary = async (project: Project) => {
   try {
-    return await callGroq(
-      'Ты — персональный помощник клиента строительной компании AsphaltPro. Пиши кратко, понятно, на русском языке.',
-      `Проект: ${project.name}, прогресс ${project.progress}%.
-Этапы: ${project.milestones.map(m => `${m.title} (${m.status})`).join(', ')}
-Напиши 3-4 предложения — резюме для клиента. Объясни, почему текущий этап важен. Тон — профессиональный, но тёплый.`
+    return await callAI(
+      PROMPT_CLIENT_SUMMARY_SYSTEM,
+      buildClientSummaryUserPrompt({
+        projectName: project.name,
+        progress: project.progress,
+        milestonesText: project.milestones.map(m => `${m.title} (${m.status})`).join(', '),
+      })
     );
   } catch (error: any) {
-    if (error?.message?.includes('API-ключ') || error?.message?.includes('лимит')) throw error;
-    console.error("Groq Client Summary Error:", error);
+    if (error?.message?.includes('API-ключ') || error?.message?.includes('лимит') || error?.message?.includes('доступ')) throw error;
+    console.error("AI Client Summary Error:", error);
     return "Мы активно работаем над вашим объектом. Все идет по плану!";
   }
 };
@@ -65,30 +105,24 @@ export const analyzeProfitability = async (project: Project, resources: Resource
   const margin = project.contractPrice > 0 ? (profit / project.contractPrice) * 100 : 0;
 
   try {
-    return await callGroq(
-      'Ты — эксперт по расчёту строительных смет для дорожного строительства и благоустройства в России. Отвечай на русском языке, используй Markdown.',
-      `Проанализируй проект:
-Название: ${project.name}
-Площадь: ${project.areaSize} м²
-Себестоимость: ${totalCost} ₽
-Цена контракта: ${project.contractPrice} ₽
-Прибыль: ${profit} ₽
-Маржа: ${margin.toFixed(1)}%
-
-Ресурсы:
-${project.items.map(item => {
-  const res = resources.find(r => r.id === item.resourceId);
-  return `- ${res?.name}: ${item.quantity} ${res?.unit} = ${item.totalCost} ₽`;
-}).join('\n')}
-
-Дай:
-1. Краткий отчёт о рентабельности
-2. Где можно оптимизировать затраты
-3. Рекомендации для менеджера`
+    return await callAI(
+      PROMPT_PROFITABILITY_SYSTEM,
+      buildProfitabilityUserPrompt({
+        projectName: project.name,
+        areaSize: project.areaSize,
+        totalCost,
+        contractPrice: project.contractPrice,
+        profit,
+        margin: margin.toFixed(1),
+        resourceLines: project.items.map(item => {
+          const res = resources.find(r => r.id === item.resourceId);
+          return `- ${res?.name}: ${item.quantity} ${res?.unit} = ${item.totalCost} ₽`;
+        }).join('\n'),
+      })
     );
   } catch (error: any) {
-    if (error?.message?.includes('API-ключ') || error?.message?.includes('лимит')) throw error;
-    console.error("Groq Analysis Error:", error);
+    if (error?.message?.includes('API-ключ') || error?.message?.includes('лимит') || error?.message?.includes('доступ')) throw error;
+    console.error("AI Analysis Error:", error);
     return "Ошибка при генерации AI-анализа.";
   }
 };
@@ -97,7 +131,7 @@ export const generateSmartEstimate = async (description: string, resources: Reso
   const sections = loadKnowledgeSections();
   const systemPrompt = assembleSystemPrompt(sections);
 
-  const text = await callGroq(
+  const text = await callAI(
     systemPrompt,
     `Задача: "${description}"
 
@@ -125,68 +159,53 @@ export const generateClientEstimateAI = async (
   }>,
   catalogWithPrices: string,
   area: number,
-  markupPercent: number
+  markupPercent: number,
+  pricingRules?: string
 ): Promise<Array<{ name: string; unit: string; quantity: number; unitPrice: number; section: string }>> => {
 
-  const systemPrompt = `Ты — система формирования коммерческих предложений (КП) для дорожно-строительной компании.
-Задача: преобразовать внутреннюю смету (себестоимость) в клиентское коммерческое предложение.
+  const totalInternalCost = internalItems.reduce((s, i) => s + i.totalCost, 0);
 
-═══ ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА ═══
+  const text = await callAI(
+    PROMPT_CLIENT_ESTIMATE_SYSTEM,
+    buildClientEstimateUserPrompt({
+      internalItemsText: internalItems.map((item, i) =>
+        `${i + 1}. ${item.resourceName} | category: ${item.category} | ${item.unit} | кол-во: ${item.quantity} | цена за ед: ${item.costPerUnit} ₽ | итого: ${item.totalCost} ₽`
+      ).join('\n'),
+      catalogWithPrices,
+      area,
+      markupPercent,
+      totalInternalCost,
+      pricingRules,
+    }),
+    true,
+    4096
+  );
 
-1. ПОГЛОЩАЕМЫЕ (НЕ показывать в КП — стоимость включена в цену работ):
-   • Весь персонал (category: "labor") — работа бригады включена в цену
-   • Техника с единицей "м/см" — каток, асфальтоукладчик, экскаватор, виброплита, автогрейдер
-   • Доставка а/б смеси автотранспортом (потонная, ед. "т") — включена в цену укладки
-   • Доставка дорожной фрезы — включена в цену фрезерования
-   • Уплотнение — включено в цену укладки
-
-2. ПРЕОБРАЗОВАНИЕ МАТЕРИАЛОВ → РАБОТЫ:
-   Клиент видит РАБОТЫ, а не сырьё. Подбирай точное название из каталога:
-   • Смесь а/б (любого типа) → "Устройство покрытия из а/б смеси..." (из каталога)
-   • Подгрунтовка / эмульсия → "Устройство подгрунтовки основания..." (из каталога)
-   • Щебень → "Устройство основания из щебня..." (из каталога)
-   • Песок строительный → "Устройство подстилающего слоя из песка..." (из каталога)
-   • Геотекстиль → "Устройство геотекстиля..." (из каталога)
-   • Бордюр дорожный → "Установка бортового камня дорожного..." (из каталога)
-   • Бордюр садовый → "Установка бортового камня садового..." (из каталога)
-   • Плитка тротуарная → "Мощение тротуарной плиткой..." (из каталога)
-   • Газон → "Устройство газона..." (из каталога)
-   • Трубы ПВХ / дождеприёмники / лотки → "Устройство ливневой канализации..." (из каталога)
-
-3. ТРАНСПОРТ (единица "рейс" — самосвал, доставка самосвалом):
-   • Показывать ОТДЕЛЬНО
-   • Цена = себестоимость ÷ количество × (1 + наценка%)
-   • Количество = из сметы
-
-4. ФРЕЗЕРОВАНИЕ (ед. м²) → работа из каталога с ценой каталога
-5. ДЕМОНТАЖ / ГИДРОМОЛОТ → "Демонтаж покрытия" из каталога
-
-6. ЦЕНООБРАЗОВАНИЕ:
-   • Работы из каталога: цена из каталога × (1 + наценка / 100)
-   • Транспорт: себестоимость_за_ед × (1 + наценка / 100)
-   • Площадные работы (м²): количество = площадь объекта
-   • Штучные (рейс, шт, п.м, компл., выезд): количество из сметы
-
-7. НЕ ДУБЛИРОВАТЬ позиции. Связанные ресурсы объединять в одну работу.
-
-8. СОРТИРОВКА: Земляные работы → Устройство основания → Асфальтирование → Благоустройство → Озеленение → Инженерные сети → Прочие работы
-
-9. unitPrice — целое число (округлять).`;
-
-  const userPrompt = `ВНУТРЕННЯЯ СМЕТА (себестоимость):
-${internalItems.map((item, i) => `${i + 1}. ${item.resourceName} | category: ${item.category} | ${item.unit} | кол-во: ${item.quantity} | цена за ед: ${item.costPerUnit} ₽ | итого: ${item.totalCost} ₽`).join('\n')}
-
-КАТАЛОГ РАБОТ С РЕКОМЕНДОВАННЫМИ ЦЕНАМИ:
-${catalogWithPrices}
-
-ПЛОЩАДЬ ОБЪЕКТА: ${area} м²
-НАЦЕНКА: ${markupPercent}%
-
-Сформируй КП. Верни JSON объект формата:
-{"items":[{"name":"название из каталога","unit":"ед.","quantity":число,"unitPrice":число_с_наценкой,"section":"раздел"}]}`;
-
-  const text = await callGroq(systemPrompt, userPrompt, true, 4096);
   const cleaned = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
   const parsed = JSON.parse(cleaned);
   return Array.isArray(parsed) ? parsed : (parsed.items || parsed.data || []);
+};
+
+// ═══ ИИ-генерация этапов работ на основе КП ═══
+
+export const generateMilestonesAI = async (
+  kpItems: Array<{ name: string; unit: string; quantity: number; section?: string }>,
+  area: number,
+  projectName: string,
+): Promise<Array<{ title: string; description: string }>> => {
+
+  const kpItemsText = kpItems.map((item, i) =>
+    `${i + 1}. ${item.name} | ${item.unit} | кол-во: ${item.quantity}${item.section ? ` | раздел: ${item.section}` : ''}`
+  ).join('\n');
+
+  const text = await callAI(
+    PROMPT_MILESTONES_SYSTEM,
+    buildMilestonesUserPrompt({ kpItemsText, area, projectName }),
+    true,
+    2048
+  );
+
+  const cleaned = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+  const parsed = JSON.parse(cleaned);
+  return Array.isArray(parsed) ? parsed : (parsed.milestones || parsed.data || []);
 };

@@ -2,9 +2,10 @@
 import React, { useState, useMemo } from 'react';
 import { Resource, Category } from '../types';
 import { SUBGROUP_ORDER } from '../constants';
-import { Plus, Search, Trash2, Edit3, Save, X, ChevronDown, ChevronRight, Package, Truck, Users, Brain, DollarSign } from 'lucide-react';
+import { Plus, Search, Trash2, Edit3, Save, X, ChevronDown, ChevronRight, Package, Truck, Users, Brain, DollarSign, FileText, RotateCcw } from 'lucide-react';
 import { AIKnowledgeBase } from './AIKnowledgeBase';
 import { PriceList } from './PriceList';
+import { PricingRulesPanel } from './PricingRulesPanel';
 
 interface DirectoryManagerProps {
   resources: Resource[];
@@ -24,7 +25,7 @@ const CategoryIcon: React.FC<{ category: Category; size?: number }> = ({ categor
 };
 
 export const DirectoryManager: React.FC<DirectoryManagerProps> = ({ resources, setResources }) => {
-  const [subTab, setSubTab] = useState<'resources' | 'knowledge' | 'pricelist'>('resources');
+  const [subTab, setSubTab] = useState<'resources' | 'knowledge' | 'pricingrules' | 'pricelist'>('resources');
   const [searchTerm, setSearchTerm] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<Resource>>({});
@@ -150,6 +151,10 @@ export const DirectoryManager: React.FC<DirectoryManagerProps> = ({ resources, s
           className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg text-sm font-bold transition-all ${subTab === 'knowledge' ? 'bg-orange-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}>
           <Brain size={18} /> База знаний ИИ
         </button>
+        <button onClick={() => setSubTab('pricingrules')}
+          className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg text-sm font-bold transition-all ${subTab === 'pricingrules' ? 'bg-orange-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}>
+          <FileText size={18} /> Правила КП
+        </button>
         <button onClick={() => setSubTab('pricelist')}
           className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg text-sm font-bold transition-all ${subTab === 'pricelist' ? 'bg-orange-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}>
           <DollarSign size={18} /> Прайс-лист
@@ -157,6 +162,8 @@ export const DirectoryManager: React.FC<DirectoryManagerProps> = ({ resources, s
       </div>
 
       {subTab === 'knowledge' && <AIKnowledgeBase />}
+
+      {subTab === 'pricingrules' && <PricingRulesPanel />}
 
       {subTab === 'pricelist' && <PriceList />}
 

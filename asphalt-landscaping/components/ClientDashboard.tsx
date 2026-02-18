@@ -7,12 +7,15 @@ import {
 } from '../types';
 import {
   FileText, Calculator, Image as ImageIcon, MessageCircle, MapPin,
-  CheckCircle, ChevronDown, Download, Phone, Layers, Truck,
-  DollarSign, Clock, Eye, Star, Send, X, CreditCard, Activity,
-  BarChart3, Ruler, ArrowRight, Mail, CalendarDays, Shield,
-  Building2, ChevronRight, TrendingUp, Sparkles,
+  CheckCircle, ChevronDown, Download, Phone,
+  DollarSign, Clock, Eye, Star, X, CreditCard, Activity,
+  BarChart3, ArrowRight, Mail, CalendarDays, Shield,
+  Building2, ChevronRight, TrendingUp, Sparkles, BookOpen,
 } from 'lucide-react';
 import { ChatWidget } from './ChatWidget';
+import { CommercialProposal } from './CommercialProposal';
+import { CalculatorHub } from './CalculatorHub';
+import { ConstructionReference } from './ConstructionReference';
 
 interface ClientDashboardProps {
   project: Project;
@@ -20,17 +23,13 @@ interface ClientDashboardProps {
   onUpdateProject: (p: Project) => void;
 }
 
-type TabId = 'overview' | 'gallery' | 'finance' | 'docs' | 'calc' | 'chat';
+type TabId = 'overview' | 'gallery' | 'finance' | 'docs' | 'calc' | 'norms' | 'chat';
 
 export const ClientDashboard: React.FC<ClientDashboardProps> = ({ project, resources, onUpdateProject }) => {
   const [activeTab, setActiveTab] = useState<TabId>('overview');
   const [viewingPhoto, setViewingPhoto] = useState<ProjectPhoto | null>(null);
   const [galleryFilter, setGalleryFilter] = useState<string>('all');
-
-  // Calculator
-  const [calcType, setCalcType] = useState<'asphalt' | 'tile' | 'earthwork'>('asphalt');
-  const [calcArea, setCalcArea] = useState(200);
-  const [calcDepth, setCalcDepth] = useState(5);
+  const [showKPPreview, setShowKPPreview] = useState(false);
 
   // Computed
   const latestReport = useMemo(() => {
@@ -73,32 +72,6 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ project, resou
     });
   };
 
-  // Calculator logic
-  const calcVolume = (calcArea * calcDepth) / 100;
-  const calcResults = calcType === 'asphalt' ? {
-    title: 'Асфальтирование',
-    items: [
-      { label: 'Асфальтобетон', value: (calcVolume * 2.3).toFixed(1), unit: 'т', price: Math.round(calcVolume * 2.3 * 4500) },
-      { label: 'Битумная эмульсия', value: (calcArea * 0.5).toFixed(0), unit: 'л', price: Math.round(calcArea * 0.5 * 45) },
-      { label: 'Работа укладчика', value: Math.ceil(calcArea / 300).toString(), unit: 'смен', price: Math.ceil(calcArea / 300) * 35000 },
-    ],
-  } : calcType === 'tile' ? {
-    title: 'Тротуарная плитка',
-    items: [
-      { label: 'Плитка тротуарная', value: (calcArea * 1.05).toFixed(0), unit: 'м²', price: Math.round(calcArea * 1.05 * 900) },
-      { label: 'Песок (основание)', value: (calcArea * 0.05 * 1.6).toFixed(1), unit: 'т', price: Math.round(calcArea * 0.05 * 800) },
-      { label: 'Бордюр', value: Math.ceil(Math.sqrt(calcArea) * 4).toString(), unit: 'шт', price: Math.ceil(Math.sqrt(calcArea) * 4) * 350 },
-    ],
-  } : {
-    title: 'Земляные работы',
-    items: [
-      { label: 'Выемка грунта', value: calcVolume.toFixed(1), unit: 'м³', price: Math.round(calcVolume * 600) },
-      { label: 'Щебень (подсыпка)', value: (calcVolume * 0.7).toFixed(1), unit: 'м³', price: Math.round(calcVolume * 0.7 * 1200) },
-      { label: 'Экскаватор', value: Math.ceil(calcVolume / 80).toString(), unit: 'смен', price: Math.ceil(calcVolume / 80) * 18000 },
-    ],
-  };
-  const calcTotal = calcResults.items.reduce((s, i) => s + i.price, 0);
-
   // Tabs
   const tabs: { id: TabId; label: string; icon: React.FC<any> }[] = [
     { id: 'overview', label: 'Обзор', icon: Activity },
@@ -106,6 +79,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ project, resou
     { id: 'finance', label: 'Оплата', icon: CreditCard },
     { id: 'docs', label: 'Документы', icon: FileText },
     { id: 'calc', label: 'Расчёт', icon: Calculator },
+    { id: 'norms', label: 'Нормы', icon: BookOpen },
     { id: 'chat', label: 'Чат', icon: MessageCircle },
   ];
 
@@ -230,9 +204,8 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ project, resou
             <section>
               <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-4">Этапы работ</h3>
               <div className="space-y-0">
-                {project.milestones.map((m, idx) => {
+                {[...project.milestones].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)).map((m, idx) => {
                   const milestonePhotos = (project.photos || []).filter(p => p.milestoneId === m.id || p.stage === m.title);
-                  const latestPhoto = milestonePhotos[0];
 
                   return (
                     <div key={m.id} className="flex gap-4">
@@ -255,26 +228,35 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ project, resou
                       {/* Content */}
                       <div className={`flex-1 pb-6 ${m.status === 'completed' ? 'opacity-80' : ''}`}>
                         <div className="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <h4 className="font-bold text-slate-800">{m.title}</h4>
-                              <p className="text-xs text-slate-500 mt-0.5">{m.description}</p>
-                              {m.date && <p className="text-[10px] text-green-600 mt-1">Завершён {formatDate(m.date)}</p>}
-                              {m.serviceCategory && (
-                                <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 mt-1 inline-block">
-                                  {SERVICE_CATEGORY_LABELS[m.serviceCategory]}
-                                </span>
-                              )}
-                            </div>
-                            {latestPhoto && (
-                              <img
-                                src={latestPhoto.url}
-                                alt={latestPhoto.description}
-                                className="w-16 h-16 rounded-lg object-cover cursor-pointer hover:scale-105 transition-transform"
-                                onClick={() => setViewingPhoto(latestPhoto)}
-                              />
+                          <div>
+                            <h4 className="font-bold text-slate-800">{m.title}</h4>
+                            <p className="text-xs text-slate-500 mt-0.5">{m.description}</p>
+                            {m.date && <p className="text-[10px] text-green-600 mt-1">Завершён {formatDate(m.date)}</p>}
+                            {m.serviceCategory && (
+                              <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 mt-1 inline-block">
+                                {SERVICE_CATEGORY_LABELS[m.serviceCategory]}
+                              </span>
                             )}
                           </div>
+                          {/* Фото этапа */}
+                          {milestonePhotos.length > 0 && (
+                            <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+                              {milestonePhotos.slice(0, 5).map(photo => (
+                                <img
+                                  key={photo.id}
+                                  src={photo.url}
+                                  alt={photo.description}
+                                  className="w-14 h-14 rounded-lg object-cover cursor-pointer hover:scale-105 transition-transform shrink-0 border-2 border-white shadow-sm"
+                                  onClick={() => setViewingPhoto(photo)}
+                                />
+                              ))}
+                              {milestonePhotos.length > 5 && (
+                                <div className="w-14 h-14 rounded-lg bg-slate-100 flex items-center justify-center shrink-0 text-xs font-bold text-slate-400">
+                                  +{milestonePhotos.length - 5}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -399,6 +381,42 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ project, resou
         {/* ========== FINANCE ========== */}
         {activeTab === 'finance' && (
           <div className="space-y-6">
+
+            {/* Contract info */}
+            {project.contractSignedAt && (
+              <section>
+                <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Договор</h3>
+                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-2xl font-black text-slate-900">{formatPrice(project.contractPrice)}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">Подписан {formatDate(project.contractSignedAt)}</p>
+                    </div>
+                    <div className="bg-green-100 text-green-700 px-3 py-1.5 rounded-full text-[10px] font-black uppercase shrink-0">
+                      Подписан
+                    </div>
+                  </div>
+                  {/* Amendments */}
+                  {(project.contractAmendments || []).length > 0 && (
+                    <div className="mt-4 pt-3 border-t border-slate-100 space-y-2">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase">Допсоглашения</p>
+                      {(project.contractAmendments || []).map(a => (
+                        <div key={a.id} className="flex items-center justify-between text-xs bg-slate-50 rounded-lg px-3 py-2">
+                          <div>
+                            <span className="text-slate-400">{formatDate(a.date)}</span>
+                            <span className="mx-1.5 line-through text-red-400">{formatPrice(a.previousPrice)}</span>
+                            <span className="text-slate-300">&rarr;</span>
+                            <span className="ml-1.5 font-bold text-green-700">{formatPrice(a.newPrice)}</span>
+                          </div>
+                          <span className="text-slate-400 max-w-[120px] truncate ml-2" title={a.reason}>{a.reason}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </section>
+            )}
+
             {/* Summary cards */}
             <div className="grid grid-cols-2 gap-4">
               <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
@@ -497,6 +515,15 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ project, resou
                         <p className="text-xs text-slate-500 italic">{project.clientEstimateNote}</p>
                       </div>
                     )}
+                    {/* Кнопка открытия КП */}
+                    <div className="px-4 py-3 bg-slate-50 border-t border-slate-100">
+                      <button
+                        onClick={() => setShowKPPreview(true)}
+                        className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2"
+                      >
+                        <FileText size={16} /> Открыть коммерческое предложение
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <div className="px-4 py-8 text-center">
@@ -512,6 +539,31 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ project, resou
         {activeTab === 'docs' && (
           <div className="space-y-3">
             <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2">Документы проекта</h3>
+
+            {/* КП карточка */}
+            {clientEstimateItems.length > 0 && (
+              <div className="bg-gradient-to-r from-emerald-50 to-teal-50 rounded-xl p-4 border border-emerald-200 flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+                  <FileText size={22} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-sm text-slate-800">Коммерческое предложение</p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-[10px] text-slate-400">Итого: {formatPrice(estimateTotal)}</span>
+                    {project.estimateIssuedAt && (
+                      <span className="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">
+                        Выставлено
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <button onClick={() => setShowKPPreview(true)}
+                  className="shrink-0 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold text-xs transition-colors flex items-center gap-1.5">
+                  <Eye size={15} /> Открыть
+                </button>
+              </div>
+            )}
+
             {(project.documents || []).map(doc => (
               <div key={doc.id} className="bg-white rounded-xl p-4 border border-slate-100 flex items-center gap-4 hover:border-emerald-200 transition-colors">
                 <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
@@ -554,98 +606,15 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ project, resou
 
         {/* ========== CALCULATOR ========== */}
         {activeTab === 'calc' && (
-          <div className="space-y-5">
-            <h3 className="text-xs font-black uppercase tracking-widest text-slate-400">Калькулятор стоимости работ</h3>
+          <CalculatorHub
+            onSendToChat={handleSendMessage}
+            onGoToChat={() => setActiveTab('chat')}
+          />
+        )}
 
-            {/* Type selector */}
-            <div className="grid grid-cols-3 gap-2">
-              {([
-                { id: 'asphalt', label: 'Асфальт', icon: Truck },
-                { id: 'tile', label: 'Плитка', icon: Layers },
-                { id: 'earthwork', label: 'Земляные', icon: Ruler },
-              ] as const).map(type => (
-                <button
-                  key={type.id}
-                  onClick={() => setCalcType(type.id)}
-                  className={`p-4 rounded-xl border-2 text-center transition-all ${
-                    calcType === type.id
-                      ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
-                      : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
-                  }`}
-                >
-                  <type.icon size={24} className="mx-auto mb-1" />
-                  <span className="text-xs font-bold">{type.label}</span>
-                </button>
-              ))}
-            </div>
-
-            {/* Sliders */}
-            <div className="bg-white rounded-2xl p-5 border border-slate-100 space-y-5">
-              <div>
-                <div className="flex justify-between mb-2">
-                  <label className="text-sm font-bold text-slate-700">Площадь</label>
-                  <span className="text-sm font-black text-emerald-600">{calcArea} м²</span>
-                </div>
-                <input
-                  type="range" min={10} max={5000} step={10} value={calcArea}
-                  onChange={e => setCalcArea(Number(e.target.value))}
-                  className="w-full accent-emerald-600"
-                />
-                <div className="flex justify-between text-[10px] text-slate-400"><span>10 м²</span><span>5 000 м²</span></div>
-              </div>
-
-              <div>
-                <div className="flex justify-between mb-2">
-                  <label className="text-sm font-bold text-slate-700">
-                    {calcType === 'earthwork' ? 'Глубина выемки' : 'Толщина слоя'}
-                  </label>
-                  <span className="text-sm font-black text-emerald-600">{calcDepth} см</span>
-                </div>
-                <input
-                  type="range" min={1} max={calcType === 'earthwork' ? 100 : 30} step={1} value={calcDepth}
-                  onChange={e => setCalcDepth(Number(e.target.value))}
-                  className="w-full accent-emerald-600"
-                />
-              </div>
-            </div>
-
-            {/* Results */}
-            <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
-              <div className="bg-emerald-50 px-5 py-3 border-b border-emerald-100">
-                <h4 className="font-bold text-emerald-800 text-sm">{calcResults.title}: примерный расчёт</h4>
-              </div>
-              <div className="divide-y divide-slate-50">
-                {calcResults.items.map((item, idx) => (
-                  <div key={idx} className="px-5 py-3 flex justify-between items-center">
-                    <div>
-                      <p className="text-sm text-slate-700 font-medium">{item.label}</p>
-                      <p className="text-xs text-slate-400">{item.value} {item.unit}</p>
-                    </div>
-                    <span className="font-bold text-sm">{formatPrice(item.price)}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="bg-slate-900 text-white px-5 py-4 flex justify-between items-center">
-                <span className="font-bold">Ориентировочная стоимость</span>
-                <span className="text-xl font-black">{formatPrice(calcTotal)}</span>
-              </div>
-            </div>
-
-            {/* CTA */}
-            <button
-              onClick={() => {
-                const text = `Запрос на расчёт: ${calcResults.title}, площадь ${calcArea}м², толщина ${calcDepth}см. Примерная стоимость: ${formatPrice(calcTotal)}`;
-                handleSendMessage(text);
-                setActiveTab('chat');
-              }}
-              className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-emerald-500 active:scale-[0.98] transition-all shadow-lg"
-            >
-              <Send size={18} /> Отправить заявку менеджеру
-            </button>
-            <p className="text-xs text-slate-400 text-center">
-              Расчёт приблизительный. Менеджер подготовит точную смету с учётом всех факторов.
-            </p>
-          </div>
+        {/* ========== NORMS ========== */}
+        {activeTab === 'norms' && (
+          <ConstructionReference theme="light" />
         )}
 
         {/* ========== CHAT ========== */}
@@ -657,6 +626,14 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ project, resou
           />
         )}
       </main>
+
+      {/* ===== КП PREVIEW ===== */}
+      {showKPPreview && (
+        <CommercialProposal
+          project={project}
+          onClose={() => setShowKPPreview(false)}
+        />
+      )}
 
       {/* ===== FULLSCREEN PHOTO ===== */}
       {viewingPhoto && (

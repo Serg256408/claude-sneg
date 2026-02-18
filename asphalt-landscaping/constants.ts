@@ -101,10 +101,10 @@ export const INITIAL_RESOURCES: Resource[] = [
 ];
 
 const DEFAULT_MILESTONES: Milestone[] = [
-  { id: 'ms1', title: 'Подготовительные работы', description: 'Разбивка осей, снятие растительного слоя, устройство корыта, вывоз грунта', status: 'completed', date: Date.now() - 86400000 * 2, serviceCategory: ServiceCategory.EARTHWORK },
-  { id: 'ms2', title: 'Устройство основания', description: 'Укладка геотекстиля, устройство песчаного и щебёночного слоёв, послойное уплотнение Ку≥0.98', status: 'current', serviceCategory: ServiceCategory.EARTHWORK },
-  { id: 'ms3', title: 'Устройство покрытия', description: 'Подгрунтовка основания, укладка а/б смеси тип Б марка II, толщ. 50 мм, уплотнение катком', status: 'pending', serviceCategory: ServiceCategory.ASPHALT },
-  { id: 'ms4', title: 'Благоустройство территории', description: 'Установка бортового камня, мощение плиткой, устройство газона, посадка деревьев, уборка', status: 'pending', serviceCategory: ServiceCategory.LANDSCAPING },
+  { id: 'ms1', title: 'Подготовительные работы', description: 'Разбивка осей, снятие растительного слоя, устройство корыта, вывоз грунта', status: 'completed', date: Date.now() - 86400000 * 2, serviceCategory: ServiceCategory.EARTHWORK, sortOrder: 0 },
+  { id: 'ms2', title: 'Устройство основания', description: 'Укладка геотекстиля, устройство песчаного и щебёночного слоёв, послойное уплотнение Ку≥0.98', status: 'current', serviceCategory: ServiceCategory.EARTHWORK, sortOrder: 1 },
+  { id: 'ms3', title: 'Устройство покрытия', description: 'Подгрунтовка основания, укладка а/б смеси тип Б марка II, толщ. 50 мм, уплотнение катком', status: 'pending', serviceCategory: ServiceCategory.ASPHALT, sortOrder: 2 },
+  { id: 'ms4', title: 'Благоустройство территории', description: 'Установка бортового камня, мощение плиткой, устройство газона, посадка деревьев, уборка', status: 'pending', serviceCategory: ServiceCategory.LANDSCAPING, sortOrder: 3 },
 ];
 
 export const MOCK_PROJECT: Project = {
@@ -155,6 +155,7 @@ export const MOCK_PROJECT: Project = {
   ],
   materialDeliveries: [],
   clientEstimateItems: [],
+  contractAmendments: [],
 };
 
 // Шаблоны чек-листов по видам работ

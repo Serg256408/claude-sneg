@@ -50,7 +50,11 @@ export function buildPromptFromWizard(data: WizardData): string {
 
   if (data.works.asphalt) {
     const method = data.asphaltMethod === 'paver' ? 'укладчиком (механизированная)' : 'вручную (швабрист)';
-    lines.push(`- Асфальтирование: метод=${method}, смесь=${MIX_LABELS[data.asphaltMixType] || data.asphaltMixType}, толщина=${data.asphaltThickness} мм, с подгрунтовкой`);
+    if (data.asphaltLayers === 2) {
+      lines.push(`- Асфальтирование (2 слоя): метод=${method}, нижний слой: смесь=${MIX_LABELS[data.asphaltBottomMixType] || data.asphaltBottomMixType}, толщина=${data.asphaltBottomThickness} мм; верхний слой: смесь=${MIX_LABELS[data.asphaltMixType] || data.asphaltMixType}, толщина=${data.asphaltThickness} мм, с подгрунтовкой между слоями`);
+    } else {
+      lines.push(`- Асфальтирование: метод=${method}, смесь=${MIX_LABELS[data.asphaltMixType] || data.asphaltMixType}, толщина=${data.asphaltThickness} мм, с подгрунтовкой`);
+    }
   }
 
   if (data.works.curbs) {

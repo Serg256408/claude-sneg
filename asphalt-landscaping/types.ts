@@ -117,6 +117,7 @@ export interface Milestone {
   plannedDate?: number;   // плановая дата
   serviceCategory?: ServiceCategory;
   completionPhoto?: string; // фото по завершении
+  sortOrder: number;      // порядок отображения
 }
 
 // ===== Документы =====
@@ -176,6 +177,15 @@ export interface PaymentScheduleItem {
   paidAt?: number;
   paidAmount?: number;
   invoiceNumber?: string;
+}
+
+// ===== Допсоглашения к договору =====
+export interface ContractAmendment {
+  id: string;
+  date: number;
+  previousPrice: number;
+  newPrice: number;
+  reason: string;
 }
 
 // ===== Поставка материалов =====
@@ -246,6 +256,10 @@ export interface Project {
   dailyReports: DailyReport[];
   paymentSchedule: PaymentScheduleItem[];
   materialDeliveries: MaterialDelivery[];
+
+  // Договор
+  contractSignedAt?: number;          // дата подписания договора
+  contractAmendments: ContractAmendment[];  // допсоглашения
 
   // Внутренняя смета
   estimateIssuedAt?: number;   // когда смета была выставлена клиенту
@@ -347,8 +361,11 @@ export interface WizardData {
   gravelType: 'granite' | 'gravel' | 'recycled' | 'limestone';
   geotextileDensity: number;
   asphaltMethod: 'paver' | 'manual';
-  asphaltThickness: number;
+  asphaltLayers: 1 | 2;              // количество слоёв
+  asphaltThickness: number;           // толщина верхнего (или единственного) слоя
   asphaltMixType: 'fine_B2' | 'coarse_A1' | 'SMA15' | 'sand_D';
+  asphaltBottomThickness: number;     // толщина нижнего слоя (к/з)
+  asphaltBottomMixType: 'fine_B2' | 'coarse_A1' | 'SMA15' | 'sand_D';
   curbType: 'road' | 'garden';
   tileThickness: number;
   lawnType: 'seed' | 'roll';
@@ -362,7 +379,8 @@ export const WIZARD_DEFAULTS: WizardData = {
   demolitionCoverType: 'asphalt', demolitionThickness: 100, demolitionMethod: 'hammer',
   excavatorType: 'loader',
   sandLayer: 200, gravelLayer: 150, gravelType: 'granite', geotextileDensity: 200,
-  asphaltMethod: 'paver', asphaltThickness: 50, asphaltMixType: 'fine_B2',
+  asphaltMethod: 'paver', asphaltLayers: 1, asphaltThickness: 50, asphaltMixType: 'fine_B2',
+  asphaltBottomThickness: 60, asphaltBottomMixType: 'coarse_A1',
   curbType: 'road', tileThickness: 60, lawnType: 'seed',
   drainagePipeLength: 0, drainageGrateCount: 0,
 };

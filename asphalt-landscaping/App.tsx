@@ -8,7 +8,7 @@ import { DirectoryManager } from './components/DirectoryManager';
 import { ProjectDetail } from './components/ProjectDetail';
 import { ForemanDashboard } from './components/ForemanDashboard';
 import { ClientDashboard } from './components/ClientDashboard';
-import { getApiKey, setApiKey, hasApiKey } from './services/geminiService';
+import { getApiKey, setApiKey, hasApiKey, getProvider, setProvider, getGrokKey, setGrokKey, getGroqKey, setGroqKey, AIProvider } from './services/geminiService';
 
 // Версия справочника ресурсов — увеличить при обновлении INITIAL_RESOURCES
 const RESOURCES_VERSION = 5;
@@ -59,6 +59,11 @@ const App: React.FC = () => {
       return JSON.parse(saved).map((p: Project) => ({
         ...p,
         clientEstimateItems: p.clientEstimateItems || [],
+        contractAmendments: p.contractAmendments || [],
+        milestones: (p.milestones || []).map((m: any, i: number) => ({
+          ...m,
+          sortOrder: m.sortOrder ?? i,
+        })),
       }));
     }
     return [MOCK_PROJECT];
@@ -67,6 +72,9 @@ const App: React.FC = () => {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [showProjectSelector, setShowProjectSelector] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [currentProvider, setCurrentProvider] = useState<AIProvider>(getProvider());
+  const [grokKeyInput, setGrokKeyInput] = useState(getGrokKey());
+  const [groqKeyInput, setGroqKeyInput] = useState(getGroqKey());
   const [apiKeyInput, setApiKeyInput] = useState(getApiKey());
 
   useEffect(() => {
@@ -103,10 +111,10 @@ const App: React.FC = () => {
 
   const handleAddProject = () => {
     const defaultMilestones: Milestone[] = [
-      { id: 'm1', title: 'Подготовка', description: 'Разметка, снятие грунта', status: 'current' },
-      { id: 'm2', title: 'Основание', description: 'Песок, щебень, уплотнение', status: 'pending' },
-      { id: 'm3', title: 'Асфальтирование', description: 'Укладка слоев асфальта', status: 'pending' },
-      { id: 'm4', title: 'Завершение', description: 'Уборка, сдача объекта', status: 'pending' }
+      { id: 'm1', title: 'Подготовка', description: 'Разметка, снятие грунта', status: 'current', sortOrder: 0 },
+      { id: 'm2', title: 'Основание', description: 'Песок, щебень, уплотнение', status: 'pending', sortOrder: 1 },
+      { id: 'm3', title: 'Асфальтирование', description: 'Укладка слоев асфальта', status: 'pending', sortOrder: 2 },
+      { id: 'm4', title: 'Завершение', description: 'Уборка, сдача объекта', status: 'pending', sortOrder: 3 }
     ];
 
     const newProject: Project = {
@@ -134,6 +142,7 @@ const App: React.FC = () => {
       paymentSchedule: [],
       materialDeliveries: [],
       clientEstimateItems: [],
+      contractAmendments: [],
     };
     setProjects([newProject, ...projects]);
     setActiveProjectId(newProject.id);
@@ -333,7 +342,7 @@ const App: React.FC = () => {
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Авторизован как</p>
               <p className="text-sm font-bold text-slate-700">Алексей Смирнов</p>
             </div>
-            <button onClick={() => { setApiKeyInput(getApiKey()); setShowSettings(true); }}
+            <button onClick={() => { setCurrentProvider(getProvider()); setGrokKeyInput(getGrokKey()); setGroqKeyInput(getGroqKey()); setShowSettings(true); }}
               className={`w-12 h-12 rounded-2xl flex items-center justify-center border transition-colors ${hasApiKey() ? 'bg-green-50 text-green-600 border-green-200 hover:bg-green-100' : 'bg-orange-50 text-orange-500 border-orange-200 hover:bg-orange-100'}`}
               title="Настройки AI">
               <Settings size={20} />
@@ -390,40 +399,87 @@ const App: React.FC = () => {
               <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-slate-600 transition-colors"><X size={20} /></button>
             </div>
             <div className="p-6 space-y-4">
+              {/* Provider toggle */}
               <div>
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">API-ключ Groq</label>
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">AI-провайдер</label>
                 <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <Key size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input
-                      type="password"
-                      className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none text-sm"
-                      value={apiKeyInput}
-                      onChange={e => setApiKeyInput(e.target.value)}
-                      placeholder="gsk_..."
-                    />
-                  </div>
                   <button
-                    onClick={() => { setApiKey(apiKeyInput); setShowSettings(false); }}
-                    className="bg-orange-600 hover:bg-orange-500 text-white px-4 py-2 rounded-lg font-bold text-sm transition-colors whitespace-nowrap"
+                    onClick={() => { setCurrentProvider('groq'); setProvider('groq'); }}
+                    className={`flex-1 py-2.5 rounded-lg font-bold text-sm transition-all ${currentProvider === 'groq' ? 'bg-orange-600 text-white shadow-md' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
                   >
-                    Сохранить
+                    Groq (бесплатно)
+                  </button>
+                  <button
+                    onClick={() => { setCurrentProvider('grok'); setProvider('grok'); }}
+                    className={`flex-1 py-2.5 rounded-lg font-bold text-sm transition-all ${currentProvider === 'grok' ? 'bg-orange-600 text-white shadow-md' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                  >
+                    xAI Grok
                   </button>
                 </div>
               </div>
-              <div className="bg-slate-50 rounded-xl p-4 space-y-2">
-                <p className="text-xs font-bold text-slate-600">Как получить ключ:</p>
-                <ol className="text-xs text-slate-500 space-y-1 list-decimal list-inside">
-                  <li>Зайдите на <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" className="text-orange-600 hover:underline font-medium">console.groq.com <ExternalLink size={10} className="inline" /></a></li>
-                  <li>Зарегистрируйтесь (через Google/GitHub)</li>
-                  <li>Создайте API Key (начинается с gsk_...)</li>
-                  <li>Вставьте ключ выше и нажмите "Сохранить"</li>
-                </ol>
-              </div>
+
+              {/* Groq key */}
+              {currentProvider === 'groq' && (
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">API-ключ Groq</label>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Key size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input type="password" className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none text-sm"
+                        value={groqKeyInput} onChange={e => setGroqKeyInput(e.target.value)} placeholder="gsk_..." />
+                    </div>
+                    <button onClick={() => { setGroqKey(groqKeyInput); setShowSettings(false); }}
+                      className="bg-orange-600 hover:bg-orange-500 text-white px-4 py-2 rounded-lg font-bold text-sm transition-colors whitespace-nowrap">
+                      Сохранить
+                    </button>
+                  </div>
+                  <div className="bg-slate-50 rounded-xl p-4 space-y-2 mt-3">
+                    <p className="text-xs font-bold text-slate-600">Как получить ключ:</p>
+                    <ol className="text-xs text-slate-500 space-y-1 list-decimal list-inside">
+                      <li>Зайдите на <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" className="text-orange-600 hover:underline font-medium">console.groq.com <ExternalLink size={10} className="inline" /></a></li>
+                      <li>Зарегистрируйтесь (через Google/GitHub)</li>
+                      <li>Создайте API Key (начинается с gsk_...)</li>
+                    </ol>
+                  </div>
+                </div>
+              )}
+
+              {/* Grok (xAI) key */}
+              {currentProvider === 'grok' && (
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">API-ключ xAI Grok</label>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Key size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input type="password" className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none text-sm"
+                        value={grokKeyInput} onChange={e => setGrokKeyInput(e.target.value)} placeholder="xai-..." />
+                    </div>
+                    <button onClick={() => { setGrokKey(grokKeyInput); setShowSettings(false); }}
+                      className="bg-orange-600 hover:bg-orange-500 text-white px-4 py-2 rounded-lg font-bold text-sm transition-colors whitespace-nowrap">
+                      Сохранить
+                    </button>
+                  </div>
+                  <div className="bg-slate-50 rounded-xl p-4 space-y-2 mt-3">
+                    <p className="text-xs font-bold text-slate-600">Как получить ключ:</p>
+                    <ol className="text-xs text-slate-500 space-y-1 list-decimal list-inside">
+                      <li>Зайдите на <a href="https://console.x.ai" target="_blank" rel="noopener noreferrer" className="text-orange-600 hover:underline font-medium">console.x.ai <ExternalLink size={10} className="inline" /></a></li>
+                      <li>Зарегистрируйтесь и пополните баланс</li>
+                      <li>Создайте API Key (начинается с xai-...)</li>
+                    </ol>
+                  </div>
+                </div>
+              )}
+
               {hasApiKey() && (
                 <div className="flex items-center gap-2 text-green-600 text-xs font-bold">
-                  <div className="w-2 h-2 bg-green-500 rounded-full" />
-                  AI-ассистент подключён (Groq / Llama 4 Maverick)
+                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                  AI подключён: {currentProvider === 'grok' ? 'xAI Grok' : 'Groq (Llama 3.3)'}
+                </div>
+              )}
+              {!hasApiKey() && (
+                <div className="flex items-center gap-2 text-orange-500 text-xs font-bold">
+                  <div className="w-2 h-2 bg-orange-400 rounded-full" />
+                  Введите API-ключ для {currentProvider === 'grok' ? 'xAI Grok' : 'Groq'}
                 </div>
               )}
             </div>
