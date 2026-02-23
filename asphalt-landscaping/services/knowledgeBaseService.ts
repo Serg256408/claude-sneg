@@ -8,7 +8,7 @@ export function loadKnowledgeSections(): AIKnowledgeSection[] {
   if (saved) {
     try {
       const parsed: AIKnowledgeSection[] = JSON.parse(saved);
-      // Добавляем новые секции из дефолтов, если их нет в сохранённых
+      // Добавляем только НОВЫЕ секции из дефолтов (которых ещё нет в сохранённых)
       const savedIds = new Set(parsed.map(s => s.id));
       const missing = DEFAULT_AI_KNOWLEDGE.filter(d => !savedIds.has(d.id));
       return [...parsed, ...missing].sort((a, b) => a.order - b.order);
@@ -16,7 +16,10 @@ export function loadKnowledgeSections(): AIKnowledgeSection[] {
       return [...DEFAULT_AI_KNOWLEDGE];
     }
   }
-  return [...DEFAULT_AI_KNOWLEDGE];
+  // Первый запуск — сохраняем defaults и возвращаем
+  const fresh = [...DEFAULT_AI_KNOWLEDGE];
+  saveKnowledgeSections(fresh);
+  return fresh;
 }
 
 export function saveKnowledgeSections(sections: AIKnowledgeSection[]): void {

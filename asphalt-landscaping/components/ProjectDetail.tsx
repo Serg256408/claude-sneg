@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Project, Resource, Category, EstimateItem, ClientEstimateItem, ContractAmendment, ServiceCategory, SERVICE_CATEGORY_LABELS, WORK_TYPE_LABELS, WorkType, AsphaltWorkType, LandscapingWorkType, EarthworkType, Expense, EXPENSE_CATEGORY_LABELS, PaymentScheduleItem, formatPrice, formatDate, formatDateTime, WEATHER_LABELS, WEATHER_ICONS, generateId, WizardData, WIZARD_DEFAULTS } from '../types';
 import { Plus, Trash2, BarChart2, MessageSquare, AlertTriangle, Sparkles, Wand2, Loader2, ArrowRight, FileText, Users, HardHat, Wallet, Calendar, Check, X, Clock, Eye, ChevronDown, ChevronUp, Camera, MapPin, Phone, Mail, CreditCard, Receipt, Image, Sun, CloudRain, Send, ExternalLink } from 'lucide-react';
 import { CLIENT_WORK_CATALOG } from '../constants';
@@ -46,8 +46,38 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
   const [fullscreenPhoto, setFullscreenPhoto] = useState<string | null>(null);
   const [catalogSectionByItem, setCatalogSectionByItem] = useState<Record<string, string>>({});
   const [wizardMode, setWizardMode] = useState(true);
-  const [wizardData, setWizardData] = useState<WizardData>({ ...WIZARD_DEFAULTS });
+  const [wizardData, setWizardData] = useState<WizardData>(() => {
+    try {
+      const saved = localStorage.getItem(`wizard_data_${project.id}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return { ...WIZARD_DEFAULTS, ...parsed, works: { ...WIZARD_DEFAULTS.works, ...(parsed.works || {}) } };
+      }
+    } catch { /* ignore */ }
+    return { ...WIZARD_DEFAULTS };
+  });
   const [wizardStep, setWizardStep] = useState(1);
+  const [wizardCollapsed, setWizardCollapsed] = useState(() => {
+    // Если есть сохранённые данные wizard — показать свёрнуто
+    try {
+      const saved = localStorage.getItem(`wizard_data_${project.id}`);
+      if (saved) {
+        const d = JSON.parse(saved);
+        return d.area > 0;
+      }
+    } catch { /* ignore */ }
+    return false;
+  });
+  // Сохранять wizardData в localStorage при изменениях
+  useEffect(() => {
+    try {
+      const hasData = wizardData.area > 0 || (wizardData.works && Object.values(wizardData.works).some(Boolean));
+      if (hasData) {
+        localStorage.setItem(`wizard_data_${project.id}`, JSON.stringify(wizardData));
+      }
+    } catch { /* ignore */ }
+  }, [wizardData, project.id]);
+
   const [showKPPreview, setShowKPPreview] = useState(false);
   const [isGeneratingMilestones, setIsGeneratingMilestones] = useState(false);
   const [showAmendmentForm, setShowAmendmentForm] = useState(false);
@@ -172,8 +202,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
         return { resourceId: item.resourceId, category: res?.category || Category.MATERIAL, quantity: item.quantity, totalCost: (res?.costPerUnit || 0) * item.quantity };
       });
       onUpdate({ ...project, name: result.projectName || project.name, areaSize: result.areaSize || wizardData.area, items: newItems });
-      setWizardStep(1);
-      setWizardData({ ...WIZARD_DEFAULTS });
+      setWizardCollapsed(true);
     } catch (e: any) { alert(e.message || 'Не удалось сгенерировать смету.'); }
     finally { setIsGenerating(false); }
   };
@@ -618,54 +647,202 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
           {/* ===== SUB-TAB: СЕБЕСТОИМОСТЬ ===== */}
           {estimateSubTab === 'internal' && (<>
           {/* AI Generator */}
-          <section className="bg-slate-900 rounded-2xl p-6 shadow-xl border border-slate-800 overflow-hidden relative">
-            <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none"><Wand2 size={120} className="text-orange-500 rotate-12" /></div>
-            <div className="relative z-10">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                  <div className="bg-orange-500 p-2 rounded-lg"><Sparkles className="text-white" size={20} /></div>
-                  <div>
-                    <h3 className="text-white font-bold text-lg">Умный AI-Ассистент</h3>
-                    <p className="text-slate-400 text-xs">{wizardMode ? 'Выберите параметры — AI подберёт ресурсы' : 'Опишите задачу свободным текстом'}</p>
-                  </div>
-                </div>
-                <div className="flex bg-slate-800 rounded-lg p-0.5">
-                  <button onClick={() => setWizardMode(true)}
-                    className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${wizardMode ? 'bg-orange-600 text-white' : 'text-slate-400 hover:text-slate-300'}`}>
-                    Мастер
-                  </button>
-                  <button onClick={() => setWizardMode(false)}
-                    className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${!wizardMode ? 'bg-orange-600 text-white' : 'text-slate-400 hover:text-slate-300'}`}>
-                    Свободный ввод
-                  </button>
+          <section className="bg-slate-900 rounded-2xl shadow-xl border border-slate-800 overflow-hidden relative">
+            {/* Заголовок — всегда видим */}
+            <div
+              className="flex items-center justify-between px-6 py-4 cursor-pointer hover:bg-slate-800/50 transition-colors"
+              onClick={() => setWizardCollapsed(!wizardCollapsed)}
+            >
+              <div className="flex items-center gap-2">
+                <div className="bg-orange-500 p-2 rounded-lg"><Sparkles className="text-white" size={20} /></div>
+                <div>
+                  <h3 className="text-white font-bold text-lg">Умный AI-Ассистент</h3>
+                  <p className="text-slate-400 text-xs">
+                    {wizardCollapsed
+                      ? `Шаг ${wizardStep}/3 · ${Object.values(wizardData.works).filter(Boolean).length} видов работ · ${wizardData.area || 0} м²`
+                      : (wizardMode ? 'Выберите параметры — AI подберёт ресурсы' : 'Опишите задачу свободным текстом')
+                    }
+                  </p>
                 </div>
               </div>
-
-              {wizardMode ? (
-                <EstimateWizard
-                  data={wizardData}
-                  onChange={setWizardData}
-                  step={wizardStep}
-                  onStepChange={setWizardStep}
-                  onGenerate={handleWizardGenerate}
-                  isGenerating={isGenerating}
-                />
-              ) : (
-                <div className="flex flex-col md:flex-row gap-3">
-                  <textarea
-                    className="flex-1 bg-slate-800 border-slate-700 border rounded-xl p-3 text-slate-200 text-sm focus:ring-2 focus:ring-orange-500 outline-none placeholder:text-slate-500 min-h-[80px]"
-                    placeholder="Пример: Нужно заасфальтировать двор 250 м2 мелкозернистым асфальтом, установить бордюры и посыпать песком."
-                    value={aiPrompt}
-                    onChange={(e) => setAiPrompt(e.target.value)}
-                  />
-                  <button onClick={handleAiGenerateEstimate} disabled={isGenerating || !aiPrompt.trim()}
-                    className="bg-orange-600 hover:bg-orange-500 disabled:bg-slate-700 text-white font-bold px-6 py-3 rounded-xl transition-all flex flex-col items-center justify-center gap-1 min-w-[160px]">
-                    {isGenerating ? <Loader2 className="animate-spin" /> : <><Wand2 size={20} /><span className="text-xs">Создать смету</span></>}
-                  </button>
-                </div>
-              )}
+              <div className="flex items-center gap-2">
+                {!wizardCollapsed && (
+                  <div className="flex bg-slate-800 rounded-lg p-0.5" onClick={e => e.stopPropagation()}>
+                    <button onClick={() => setWizardMode(true)}
+                      className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${wizardMode ? 'bg-orange-600 text-white' : 'text-slate-400 hover:text-slate-300'}`}>
+                      Мастер
+                    </button>
+                    <button onClick={() => setWizardMode(false)}
+                      className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${!wizardMode ? 'bg-orange-600 text-white' : 'text-slate-400 hover:text-slate-300'}`}>
+                      Свободный ввод
+                    </button>
+                  </div>
+                )}
+                <button className="p-1.5 text-slate-400 hover:text-white transition-colors">
+                  {wizardCollapsed ? <ChevronDown size={20} /> : <ChevronUp size={20} />}
+                </button>
+              </div>
             </div>
+
+            {/* Тело — сворачивается */}
+            {!wizardCollapsed && (
+              <div className="px-6 pb-6 relative">
+                <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none"><Wand2 size={120} className="text-orange-500 rotate-12" /></div>
+                <div className="relative z-10">
+                  {wizardMode ? (
+                    <EstimateWizard
+                      data={wizardData}
+                      onChange={setWizardData}
+                      step={wizardStep}
+                      onStepChange={setWizardStep}
+                      onGenerate={handleWizardGenerate}
+                      isGenerating={isGenerating}
+                    />
+                  ) : (
+                    <div className="flex flex-col md:flex-row gap-3">
+                      <textarea
+                        className="flex-1 bg-slate-800 border-slate-700 border rounded-xl p-3 text-slate-200 text-sm focus:ring-2 focus:ring-orange-500 outline-none placeholder:text-slate-500 min-h-[80px]"
+                        placeholder="Пример: Нужно заасфальтировать двор 250 м2 мелкозернистым асфальтом, установить бордюры и посыпать песком."
+                        value={aiPrompt}
+                        onChange={(e) => setAiPrompt(e.target.value)}
+                      />
+                      <button onClick={handleAiGenerateEstimate} disabled={isGenerating || !aiPrompt.trim()}
+                        className="bg-orange-600 hover:bg-orange-500 disabled:bg-slate-700 text-white font-bold px-6 py-3 rounded-xl transition-all flex flex-col items-center justify-center gap-1 min-w-[160px]">
+                        {isGenerating ? <Loader2 className="animate-spin" /> : <><Wand2 size={20} /><span className="text-xs">Создать смету</span></>}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </section>
+
+          {/* ТЗ проекта — всегда видно если есть данные wizard */}
+          {wizardData.area > 0 && wizardData.works && Object.values(wizardData.works).some(Boolean) && (
+            <section className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-2xl shadow-lg border border-slate-700 p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-white font-bold text-sm flex items-center gap-2">
+                  <FileText size={16} className="text-orange-400" />
+                  ТЗ проекта — {wizardData.area} м²
+                </h3>
+                {project.items.length > 0 && (
+                  <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-1 rounded-lg">Смета сформирована</span>
+                )}
+              </div>
+
+              {/* Список работ — компактно */}
+              <div className="flex flex-wrap gap-1.5">
+                {wizardData.works.demolition && <span className="bg-red-500/15 text-red-300 text-[10px] font-bold px-2 py-1 rounded-lg">Демонтаж</span>}
+                {wizardData.works.earthwork && <span className="bg-amber-500/15 text-amber-300 text-[10px] font-bold px-2 py-1 rounded-lg">Земляные {wizardData.excavationDepthMode === 'auto' ? `≈${Math.round(((wizardData.works.foundation ? wizardData.sandLayer + wizardData.gravelLayer : 0) + (wizardData.works.asphalt ? (wizardData.asphaltLayers === 2 ? wizardData.asphaltThickness + wizardData.asphaltBottomThickness : wizardData.asphaltThickness) : 0)) / 10)} см` : wizardData.excavationManualUnit === 'm3' ? `${wizardData.excavationVolumeM3} м³` : `${wizardData.excavationDepthCm} см`}</span>}
+                {wizardData.works.foundation && <span className="bg-yellow-500/15 text-yellow-300 text-[10px] font-bold px-2 py-1 rounded-lg">Основание ({wizardData.sandLayer > 0 ? `п.${wizardData.sandLayer}` : ''}{wizardData.sandLayer > 0 && wizardData.gravelLayer > 0 ? '+' : ''}{wizardData.gravelLayer > 0 ? `щ.${wizardData.gravelLayer}` : ''} мм)</span>}
+                {wizardData.works.asphalt && <span className="bg-slate-500/15 text-slate-300 text-[10px] font-bold px-2 py-1 rounded-lg">Асфальт {wizardData.asphaltLayers === 2 ? `2сл ${wizardData.asphaltBottomThickness}+${wizardData.asphaltThickness}` : wizardData.asphaltThickness} мм</span>}
+                {wizardData.works.curbs && <span className="bg-purple-500/15 text-purple-300 text-[10px] font-bold px-2 py-1 rounded-lg">Бордюры {wizardData.perimeterLength} п.м</span>}
+                {wizardData.works.tiles && <span className="bg-cyan-500/15 text-cyan-300 text-[10px] font-bold px-2 py-1 rounded-lg">Плитка {wizardData.tileThickness} мм</span>}
+                {wizardData.works.landscaping && <span className="bg-green-500/15 text-green-300 text-[10px] font-bold px-2 py-1 rounded-lg">Газон</span>}
+                {wizardData.works.drainage && <span className="bg-blue-500/15 text-blue-300 text-[10px] font-bold px-2 py-1 rounded-lg">Ливнёвка</span>}
+                {wizardData.soilDisposal === 'haul' && wizardData.works.earthwork && <span className="bg-orange-500/15 text-orange-300 text-[10px] font-bold px-2 py-1 rounded-lg">Вывоз грунта</span>}
+                {wizardData.soilDisposal === 'spread' && wizardData.works.earthwork && <span className="bg-orange-500/15 text-orange-300 text-[10px] font-bold px-2 py-1 rounded-lg">Планировка грунта</span>}
+                {wizardData.soilDisposal === 'both' && wizardData.works.earthwork && <span className="bg-orange-500/15 text-orange-300 text-[10px] font-bold px-2 py-1 rounded-lg">Вывоз + планировка</span>}
+              </div>
+
+              {/* Этапы по дням — показываем после генерации сметы */}
+              {project.items.length > 0 && (() => {
+                const area = wizardData.area;
+                const d = wizardData;
+                const phases: { name: string; days: number; color: string }[] = [];
+
+                // Демонтаж
+                if (d.works.demolition) {
+                  const demoArea = area;
+                  if (d.demolitionMethod === 'milling') {
+                    phases.push({ name: 'Демонтаж (фрезерование)', days: Math.max(1, Math.ceil(demoArea / 800)), color: 'bg-red-500' });
+                  } else {
+                    phases.push({ name: 'Демонтаж (гидромолот)', days: Math.max(1, Math.ceil(demoArea / 150)), color: 'bg-red-500' });
+                  }
+                }
+
+                // Выемка грунта
+                if (d.works.earthwork) {
+                  let volumeM3: number;
+                  if (d.excavationDepthMode === 'manual' && d.excavationManualUnit === 'm3') {
+                    volumeM3 = d.excavationVolumeM3;
+                  } else {
+                    const depthMm = d.excavationDepthMode === 'manual'
+                      ? d.excavationDepthCm * 10
+                      : (d.works.foundation ? d.sandLayer + d.gravelLayer : 0) + (d.works.asphalt ? (d.asphaltLayers === 2 ? d.asphaltThickness + d.asphaltBottomThickness : d.asphaltThickness) : 0);
+                    volumeM3 = area * (depthMm / 1000) * 1.25;
+                  }
+                  phases.push({ name: `Выемка грунта (≈${Math.round(volumeM3)} м³)`, days: Math.max(1, Math.ceil(volumeM3 / 250)), color: 'bg-amber-500' });
+                }
+
+                // Основание — песок
+                if (d.works.foundation && d.sandLayer > 0) {
+                  const sandVol = area * (d.sandLayer / 1000) * 1.2;
+                  phases.push({ name: `Укладка песка (≈${Math.round(sandVol)} м³)`, days: Math.max(1, Math.ceil(sandVol / 180)), color: 'bg-yellow-500' });
+                }
+
+                // Основание — щебень
+                if (d.works.foundation && d.gravelLayer > 0) {
+                  const gravelVol = area * (d.gravelLayer / 1000) * 1.3;
+                  phases.push({ name: `Укладка щебня (≈${Math.round(gravelVol)} м³)`, days: Math.max(1, Math.ceil(gravelVol / 150)), color: 'bg-yellow-600' });
+                }
+
+                // Ливнёвка (параллельно с основанием, но покажем отдельно)
+                if (d.works.drainage) {
+                  const drainDays = Math.max(1, Math.ceil(d.drainagePipeLength / 40)) + (d.drainageNewWellCount > 0 ? d.drainageNewWellCount : 0);
+                  phases.push({ name: `Ливневая канализация`, days: drainDays, color: 'bg-blue-500' });
+                }
+
+                // Бордюры
+                if (d.works.curbs) {
+                  phases.push({ name: `Бордюры (${d.perimeterLength} п.м)`, days: Math.max(1, Math.ceil(d.perimeterLength / 60)), color: 'bg-purple-500' });
+                }
+
+                // Асфальт
+                if (d.works.asphalt) {
+                  const asphaltDaysPerLayer = Math.max(1, Math.ceil(area / (d.asphaltMethod === 'paver' ? 3000 : 150)));
+                  const totalLayers = d.asphaltLayers === 2 ? 2 : 1;
+                  phases.push({ name: `Асфальтирование (${totalLayers} ${totalLayers === 2 ? 'слоя' : 'слой'})`, days: asphaltDaysPerLayer * totalLayers, color: 'bg-slate-500' });
+                }
+
+                // Плитка
+                if (d.works.tiles) {
+                  phases.push({ name: 'Укладка плитки', days: Math.max(1, Math.ceil(area / 30)), color: 'bg-cyan-500' });
+                }
+
+                // Озеленение
+                if (d.works.landscaping) {
+                  phases.push({ name: 'Озеленение', days: Math.max(1, Math.ceil(area / 200)), color: 'bg-green-500' });
+                }
+
+                const totalDays = phases.reduce((s, p) => s + p.days, 0);
+
+                return (
+                  <div className="space-y-2 pt-2 border-t border-slate-700">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[10px] font-bold text-orange-300 uppercase tracking-widest">Этапы работ (ориентировочно)</p>
+                      <span className="text-xs text-white font-bold">≈ {totalDays} {totalDays === 1 ? 'день' : totalDays < 5 ? 'дня' : 'дней'}</span>
+                    </div>
+                    <div className="space-y-1">
+                      {phases.map((phase, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                          <div className={`w-2 h-2 rounded-full ${phase.color} shrink-0`} />
+                          <span className="text-slate-300 text-xs flex-1">{phase.name}</span>
+                          <span className="text-slate-400 text-xs font-bold">{phase.days} {phase.days === 1 ? 'день' : phase.days < 5 ? 'дня' : 'дней'}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Визуальная шкала */}
+                    <div className="flex rounded-full overflow-hidden h-2 bg-slate-700">
+                      {phases.map((phase, i) => (
+                        <div key={i} className={`${phase.color} transition-all`} style={{ width: `${(phase.days / totalDays) * 100}%` }} title={`${phase.name}: ${phase.days} дн.`} />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+            </section>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             <div className="lg:col-span-2 space-y-6">
@@ -1003,29 +1180,41 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
                           </div>
                           {/* Row 2: Price × Qty Unit = Total + Delete */}
                           <div className="flex items-center gap-2 flex-wrap pl-7">
-                            <input type="number"
-                              className="w-24 bg-white border-slate-200 border p-1.5 rounded-lg outline-none text-right focus:ring-2 focus:ring-orange-500 text-sm"
-                              value={item.unitPrice}
-                              onChange={(e) => handleUpdateClientItem(item.id, { unitPrice: Number(e.target.value) })}
-                              placeholder="Цена"
-                            />
-                            <span className="text-slate-300 text-sm">×</span>
-                            <input type="number"
-                              className="w-20 bg-white border-slate-200 border p-1.5 rounded-lg outline-none text-right focus:ring-2 focus:ring-orange-500 text-sm"
-                              value={item.quantity}
-                              onChange={(e) => handleUpdateClientItem(item.id, { quantity: Number(e.target.value) })}
-                              placeholder="Кол-во"
-                            />
-                            <input type="text"
-                              className="w-14 bg-white border-slate-200 border p-1.5 rounded-lg outline-none text-center focus:ring-2 focus:ring-orange-500 text-xs"
-                              value={item.unit}
-                              onChange={(e) => handleUpdateClientItem(item.id, { unit: e.target.value })}
-                              placeholder="ед."
-                            />
-                            <span className="text-slate-300 text-sm">=</span>
-                            <span className="font-black text-slate-800 ml-auto">{formatPrice(item.totalPrice)}</span>
+                            <div className="flex flex-col items-center">
+                              <input type="number"
+                                className="w-24 bg-white border-slate-200 border p-1.5 rounded-lg outline-none text-right focus:ring-2 focus:ring-orange-500 text-sm"
+                                value={item.unitPrice}
+                                onChange={(e) => handleUpdateClientItem(item.id, { unitPrice: Number(e.target.value) })}
+                                placeholder="Цена"
+                              />
+                              <span className="text-[9px] text-slate-400 mt-0.5">Цена</span>
+                            </div>
+                            <span className="text-slate-300 text-sm mb-3">×</span>
+                            <div className="flex flex-col items-center">
+                              <input type="number"
+                                className="w-20 bg-white border-slate-200 border p-1.5 rounded-lg outline-none text-right focus:ring-2 focus:ring-orange-500 text-sm"
+                                value={item.quantity}
+                                onChange={(e) => handleUpdateClientItem(item.id, { quantity: Number(e.target.value) })}
+                                placeholder="Кол-во"
+                              />
+                              <span className="text-[9px] text-slate-400 mt-0.5">Кол-во</span>
+                            </div>
+                            <div className="flex flex-col items-center">
+                              <input type="text"
+                                className="w-14 bg-white border-slate-200 border p-1.5 rounded-lg outline-none text-center focus:ring-2 focus:ring-orange-500 text-xs"
+                                value={item.unit}
+                                onChange={(e) => handleUpdateClientItem(item.id, { unit: e.target.value })}
+                                placeholder="ед."
+                              />
+                              <span className="text-[9px] text-slate-400 mt-0.5">Ед.</span>
+                            </div>
+                            <span className="text-slate-300 text-sm mb-3">=</span>
+                            <div className="flex flex-col items-end ml-auto">
+                              <span className="font-black text-slate-800">{formatPrice(item.totalPrice)}</span>
+                              <span className="text-[9px] text-slate-400 mt-0.5">Итого</span>
+                            </div>
                             <button onClick={() => handleDeleteClientItem(item.id)}
-                              className="text-red-300 hover:text-red-500 p-1 transition-colors ml-1" title="Удалить">
+                              className="text-red-300 hover:text-red-500 p-1 transition-colors ml-1 mb-3" title="Удалить">
                               <Trash2 size={15} />
                             </button>
                           </div>

@@ -1,6 +1,6 @@
 import React from 'react';
 import { WizardData } from '../types';
-import { Trash2, Mountain, Layers, Square, PanelTop, Grid3X3, TreePine, Droplets, Check, ArrowRight, ArrowLeft, Wand2, Loader2 } from 'lucide-react';
+import { Trash2, Mountain, Layers, Square, PanelTop, Grid3X3, TreePine, Droplets, Check, ArrowRight, ArrowLeft, Wand2, Loader2, MessageSquare } from 'lucide-react';
 
 interface EstimateWizardProps {
   data: WizardData;
@@ -144,19 +144,75 @@ export const EstimateWizard: React.FC<EstimateWizardProps> = ({ data, onChange, 
       )}
 
       {/* Earthwork */}
-      {data.works.earthwork && (
-        <div className="bg-slate-800/50 rounded-xl p-4 space-y-3">
-          <h4 className="text-orange-400 text-xs font-bold flex items-center gap-1.5"><Mountain size={14} /> Земляные работы</h4>
-          <div>
-            <SectionLabel>Тип экскаватора</SectionLabel>
-            <PillGroup options={[
-              { value: 'loader' as const, label: 'Экскаватор-погрузчик (малый объём)' },
-              { value: 'tracked' as const, label: 'Гусеничный экскаватор (большой объём)' },
-            ]}
-              value={data.excavatorType} onChange={v => update('excavatorType', v)} />
+      {data.works.earthwork && (() => {
+        const autoDepthMm =
+          (data.works.foundation ? (data.sandLayer + data.gravelLayer) : 0)
+          + (data.works.asphalt ? (data.asphaltLayers === 2 ? data.asphaltThickness + data.asphaltBottomThickness : data.asphaltThickness) : 0);
+        const autoDepthCm = Math.round(autoDepthMm / 10);
+        const autoVolume = data.area > 0 ? Math.round(data.area * (autoDepthMm / 1000) * 1.25) : 0;
+
+        return (
+          <div className="bg-slate-800/50 rounded-xl p-4 space-y-3">
+            <h4 className="text-orange-400 text-xs font-bold flex items-center gap-1.5"><Mountain size={14} /> Земляные работы</h4>
+            <div>
+              <SectionLabel>Тип экскаватора</SectionLabel>
+              <PillGroup options={[
+                { value: 'loader' as const, label: 'Экскаватор-погрузчик (малый объём)' },
+                { value: 'tracked' as const, label: 'Гусеничный экскаватор (большой объём)' },
+              ]}
+                value={data.excavatorType} onChange={v => update('excavatorType', v)} />
+            </div>
+
+            {/* Excavation depth */}
+            <div className="border-t border-slate-700 pt-3 mt-2 space-y-3">
+              <p className="text-[10px] font-bold text-orange-300 uppercase tracking-widest">Глубина выемки</p>
+              <PillGroup options={[
+                { value: 'auto' as const, label: `Авто из слоёв (≈${autoDepthCm} см)` },
+                { value: 'manual' as const, label: 'Задать вручную' },
+              ]}
+                value={data.excavationDepthMode} onChange={v => update('excavationDepthMode', v)} />
+
+              {data.excavationDepthMode === 'auto' && autoDepthMm > 0 && (
+                <div className="bg-slate-900/50 rounded-lg p-2.5 text-[10px] text-slate-400 leading-relaxed">
+                  {data.works.foundation && data.sandLayer > 0 && <span>песок {data.sandLayer} мм</span>}
+                  {data.works.foundation && data.sandLayer > 0 && data.gravelLayer > 0 && <span> + </span>}
+                  {data.works.foundation && data.gravelLayer > 0 && <span>щебень {data.gravelLayer} мм</span>}
+                  {data.works.asphalt && (data.works.foundation ? ' + ' : '')}
+                  {data.works.asphalt && <span>асфальт {data.asphaltLayers === 2 ? `${data.asphaltBottomThickness}+${data.asphaltThickness}` : data.asphaltThickness} мм</span>}
+                  <span className="text-orange-400 font-bold"> = {autoDepthMm} мм ({autoDepthCm} см)</span>
+                  {data.area > 0 && <span className="text-slate-500"> → ≈{autoVolume} м³ с рыхлением</span>}
+                </div>
+              )}
+
+              {data.excavationDepthMode === 'manual' && (
+                <>
+                  <PillGroup options={[
+                    { value: 'cm' as const, label: 'В сантиметрах (см)' },
+                    { value: 'm3' as const, label: 'В кубометрах (м³)' },
+                  ]}
+                    value={data.excavationManualUnit} onChange={v => update('excavationManualUnit', v)} />
+                  {data.excavationManualUnit === 'cm' ? (
+                    <NumberInput value={data.excavationDepthCm} onChange={v => update('excavationDepthCm', v)} suffix="см" placeholder="40" />
+                  ) : (
+                    <NumberInput value={data.excavationVolumeM3} onChange={v => update('excavationVolumeM3', v)} suffix="м³" placeholder="200" />
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Soil disposal */}
+            <div className="border-t border-slate-700 pt-3 mt-2 space-y-2">
+              <p className="text-[10px] font-bold text-orange-300 uppercase tracking-widest">Утилизация грунта</p>
+              <PillGroup options={[
+                { value: 'haul' as const, label: 'Вывоз на утилизацию' },
+                { value: 'spread' as const, label: 'Планировка по территории' },
+                { value: 'both' as const, label: 'Часть вывоз + часть планировка' },
+              ]}
+                value={data.soilDisposal} onChange={v => update('soilDisposal', v)} />
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Foundation */}
       {data.works.foundation && (
@@ -316,8 +372,36 @@ export const EstimateWizard: React.FC<EstimateWizardProps> = ({ data, onChange, 
             <SectionLabel>Количество дождеприёмников</SectionLabel>
             <NumberInput value={data.drainageGrateCount} onChange={v => update('drainageGrateCount', v)} suffix="шт" placeholder="3" />
           </div>
+          <div className="border-t border-slate-700 pt-3 mt-2 space-y-3">
+            <p className="text-[10px] font-bold text-orange-300 uppercase tracking-widest">Колодцы</p>
+            <div>
+              <SectionLabel>Строительство нового колодца</SectionLabel>
+              <NumberInput value={data.drainageNewWellCount} onChange={v => update('drainageNewWellCount', v)} suffix="шт" placeholder="0" />
+            </div>
+            <div>
+              <SectionLabel>Регулировка высоты колодца</SectionLabel>
+              <NumberInput value={data.drainageWellAdjustCount} onChange={v => update('drainageWellAdjustCount', v)} suffix="шт" placeholder="0" />
+            </div>
+            <div>
+              <SectionLabel>Демонтаж (вывод) колодца</SectionLabel>
+              <NumberInput value={data.drainageWellRemovalCount} onChange={v => update('drainageWellRemovalCount', v)} suffix="шт" placeholder="0" />
+            </div>
+          </div>
         </div>
       )}
+
+      {/* Comment for AI */}
+      <div className="bg-slate-800/50 rounded-xl p-4 space-y-2">
+        <h4 className="text-orange-400 text-xs font-bold flex items-center gap-1.5"><MessageSquare size={14} /> Комментарий к смете</h4>
+        <p className="text-[10px] text-slate-500">Доп. пожелания, уточнения — ИИ учтёт при расчёте</p>
+        <textarea
+          value={data.comment}
+          onChange={e => update('comment', e.target.value)}
+          placeholder="Например: площадка на склоне, нужен дренаж по периметру, заезд для фуры 12 м..."
+          rows={3}
+          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm placeholder:text-slate-600 focus:ring-2 focus:ring-orange-500 outline-none resize-none"
+        />
+      </div>
     </div>
   );
 
@@ -325,7 +409,18 @@ export const EstimateWizard: React.FC<EstimateWizardProps> = ({ data, onChange, 
   const renderStep3 = () => {
     const items: string[] = [];
     if (data.works.demolition) items.push(`Демонтаж ${data.demolitionCoverType === 'asphalt' ? 'асфальта' : 'бетона'}, ${data.demolitionThickness} мм, ${data.demolitionMethod === 'milling' ? 'фрезой' : 'гидромолотом'}`);
-    if (data.works.earthwork) items.push(`Земляные работы (${data.excavatorType === 'loader' ? 'экскаватор-погрузчик' : 'гусеничный экскаватор'})`);
+    if (data.works.earthwork) {
+      const excType = data.excavatorType === 'loader' ? 'экскаватор-погрузчик' : 'гусеничный экскаватор';
+      let depthStr: string;
+      if (data.excavationDepthMode === 'manual') {
+        depthStr = data.excavationManualUnit === 'm3' ? `${data.excavationVolumeM3} м³` : `${data.excavationDepthCm} см`;
+      } else {
+        const autoMm = (data.works.foundation ? (data.sandLayer + data.gravelLayer) : 0) + (data.works.asphalt ? (data.asphaltLayers === 2 ? data.asphaltThickness + data.asphaltBottomThickness : data.asphaltThickness) : 0);
+        depthStr = `${Math.round(autoMm / 10)} см (авто)`;
+      }
+      const disposal = data.soilDisposal === 'haul' ? 'вывоз' : data.soilDisposal === 'spread' ? 'планировка' : 'вывоз + планировка';
+      items.push(`Земляные работы: ${excType}, выемка ${depthStr}, ${disposal}`);
+    }
     if (data.works.foundation) {
       const parts = [];
       if (data.sandLayer > 0) parts.push(`песок ${data.sandLayer} мм`);
@@ -344,7 +439,13 @@ export const EstimateWizard: React.FC<EstimateWizardProps> = ({ data, onChange, 
     if (data.works.curbs) items.push(`Бордюры ${data.curbType === 'road' ? 'дорожные' : 'садовые'}, ${data.perimeterLength} п.м`);
     if (data.works.tiles) items.push(`Плитка ${data.tileThickness} мм`);
     if (data.works.landscaping) items.push(`Газон ${data.lawnType === 'seed' ? 'посевной' : 'рулонный'}`);
-    if (data.works.drainage) items.push(`Ливнёвка: ${data.drainagePipeLength} п.м, ${data.drainageGrateCount} дождеприёмников`);
+    if (data.works.drainage) {
+      const drainParts = [`${data.drainagePipeLength} п.м труб`, `${data.drainageGrateCount} дождеприёмников`];
+      if (data.drainageNewWellCount > 0) drainParts.push(`${data.drainageNewWellCount} новых колодцев`);
+      if (data.drainageWellAdjustCount > 0) drainParts.push(`${data.drainageWellAdjustCount} регул. высоты`);
+      if (data.drainageWellRemovalCount > 0) drainParts.push(`${data.drainageWellRemovalCount} демонтаж колодцев`);
+      items.push(`Ливнёвка: ${drainParts.join(', ')}`);
+    }
 
     return (
       <div className="space-y-3">
@@ -362,6 +463,12 @@ export const EstimateWizard: React.FC<EstimateWizardProps> = ({ data, onChange, 
             ))}
           </ul>
         </div>
+        {data.comment.trim() && (
+          <div className="bg-slate-800/50 rounded-xl p-4">
+            <p className="text-orange-400 font-bold text-[10px] uppercase tracking-widest mb-1">Комментарий</p>
+            <p className="text-slate-300 text-sm">{data.comment}</p>
+          </div>
+        )}
         <p className="text-slate-500 text-[10px] text-center">AI рассчитает количества по строительным нормам и подберёт ресурсы из справочника</p>
       </div>
     );

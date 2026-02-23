@@ -356,6 +356,12 @@ export interface WizardData {
   demolitionThickness: number;
   demolitionMethod: 'hammer' | 'milling';
   excavatorType: 'loader' | 'tracked';
+  excavationDepthMode: 'auto' | 'manual';
+  excavationDepthCm: number;
+  excavationVolumeM3: number;
+  excavationManualUnit: 'cm' | 'm3';
+  soilDisposal: 'haul' | 'spread' | 'both';
+  soilHaulPercent: number;
   sandLayer: number;
   gravelLayer: number;
   gravelType: 'granite' | 'gravel' | 'recycled' | 'limestone';
@@ -371,6 +377,10 @@ export interface WizardData {
   lawnType: 'seed' | 'roll';
   drainagePipeLength: number;
   drainageGrateCount: number;
+  drainageWellAdjustCount: number;    // регулировка высоты колодца
+  drainageNewWellCount: number;       // строительство нового колодца
+  drainageWellRemovalCount: number;   // вывод (демонтаж) колодца
+  comment: string;                    // комментарий к смете для ИИ
 }
 
 export const WIZARD_DEFAULTS: WizardData = {
@@ -378,11 +388,15 @@ export const WIZARD_DEFAULTS: WizardData = {
   area: 0, perimeterLength: 0,
   demolitionCoverType: 'asphalt', demolitionThickness: 100, demolitionMethod: 'hammer',
   excavatorType: 'loader',
+  excavationDepthMode: 'auto', excavationDepthCm: 0, excavationVolumeM3: 0,
+  excavationManualUnit: 'cm', soilDisposal: 'haul', soilHaulPercent: 100,
   sandLayer: 200, gravelLayer: 150, gravelType: 'granite', geotextileDensity: 200,
   asphaltMethod: 'paver', asphaltLayers: 1, asphaltThickness: 50, asphaltMixType: 'fine_B2',
   asphaltBottomThickness: 60, asphaltBottomMixType: 'coarse_A1',
   curbType: 'road', tileThickness: 60, lawnType: 'seed',
   drainagePipeLength: 0, drainageGrateCount: 0,
+  drainageWellAdjustCount: 0, drainageNewWellCount: 0, drainageWellRemovalCount: 0,
+  comment: '',
 };
 
 // ═══════════════════════════════════════════════════════════

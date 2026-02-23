@@ -37,7 +37,25 @@ export function buildPromptFromWizard(data: WizardData): string {
     const excavator = data.excavatorType === 'loader'
       ? 'экскаватор-погрузчик (малый объём)'
       : 'гусеничный/колёсный экскаватор (большой объём)';
-    lines.push(`- Земляные работы: устройство корыта, планировка, вывоз грунта, техника=${excavator}`);
+
+    let depthInfo: string;
+    if (data.excavationDepthMode === 'manual') {
+      if (data.excavationManualUnit === 'm3') {
+        depthInfo = `объём выемки=${data.excavationVolumeM3} м³ (задано вручную)`;
+      } else {
+        depthInfo = `глубина корыта=${data.excavationDepthCm * 10} мм (задано вручную)`;
+      }
+    } else {
+      const autoMm = (data.works.foundation ? (data.sandLayer + data.gravelLayer) : 0)
+        + (data.works.asphalt ? (data.asphaltLayers === 2 ? data.asphaltThickness + data.asphaltBottomThickness : data.asphaltThickness) : 0);
+      depthInfo = `глубина корыта=${autoMm} мм (авто: сумма слоёв основания и асфальта)`;
+    }
+
+    const disposalParts: string[] = [];
+    if (data.soilDisposal === 'haul' || data.soilDisposal === 'both') disposalParts.push('вывоз грунта на утилизацию');
+    if (data.soilDisposal === 'spread' || data.soilDisposal === 'both') disposalParts.push('планировка излишков по территории');
+
+    lines.push(`- Земляные работы: устройство корыта, ${depthInfo}, техника=${excavator}, ${disposalParts.join(' + ')}`);
   }
 
   if (data.works.foundation) {
@@ -72,11 +90,21 @@ export function buildPromptFromWizard(data: WizardData): string {
   }
 
   if (data.works.drainage) {
-    lines.push(`- Ливневая канализация: трубы ПВХ ∅110 мм=${data.drainagePipeLength} п.м, дождеприёмники=${data.drainageGrateCount} шт`);
+    const drainParts = [`трубы ПВХ ∅110 мм=${data.drainagePipeLength} п.м`, `дождеприёмники=${data.drainageGrateCount} шт`];
+    if (data.drainageNewWellCount > 0) drainParts.push(`строительство новых колодцев=${data.drainageNewWellCount} шт (полимерный ∅400, с люком, глубина до 1.5 м)`);
+    if (data.drainageWellAdjustCount > 0) drainParts.push(`регулировка высоты существующих колодцев=${data.drainageWellAdjustCount} шт (наращивание/подрезка горловины, замена люка)`);
+    if (data.drainageWellRemovalCount > 0) drainParts.push(`демонтаж (вывод) старых колодцев=${data.drainageWellRemovalCount} шт (с засыпкой котлована и уплотнением)`);
+    lines.push(`- Ливневая канализация: ${drainParts.join(', ')}`);
   }
 
   lines.push('');
   lines.push('ОБЯЗАТЕЛЬНО включи: прораб, дорожных рабочих, геодезиста (1 выезд), всю необходимую технику и доставку материалов.');
+
+  if (data.comment.trim()) {
+    lines.push('');
+    lines.push(`ДОПОЛНИТЕЛЬНЫЙ КОММЕНТАРИЙ ЗАКАЗЧИКА: ${data.comment.trim()}`);
+    lines.push('Учти этот комментарий при формировании сметы — добавь или скорректируй ресурсы при необходимости.');
+  }
 
   return lines.join('\n');
 }
