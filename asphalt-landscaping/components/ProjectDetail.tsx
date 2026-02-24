@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { Project, Resource, Category, EstimateItem, ClientEstimateItem, ContractAmendment, ServiceCategory, SERVICE_CATEGORY_LABELS, WORK_TYPE_LABELS, WorkType, AsphaltWorkType, LandscapingWorkType, EarthworkType, Expense, EXPENSE_CATEGORY_LABELS, PaymentScheduleItem, formatPrice, formatDate, formatDateTime, WEATHER_LABELS, WEATHER_ICONS, generateId, WizardData, WIZARD_DEFAULTS } from '../types';
-import { Plus, Trash2, BarChart2, MessageSquare, AlertTriangle, Sparkles, Wand2, Loader2, ArrowRight, FileText, Users, HardHat, Wallet, Calendar, Check, X, Clock, Eye, ChevronDown, ChevronUp, Camera, MapPin, Phone, Mail, CreditCard, Receipt, Image, Sun, CloudRain, Send, ExternalLink } from 'lucide-react';
+import { Plus, Trash2, BarChart2, MessageSquare, AlertTriangle, Sparkles, Wand2, Loader2, ArrowRight, FileText, Users, HardHat, Wallet, Calendar, Check, X, Clock, Eye, ChevronDown, ChevronUp, Camera, MapPin, Phone, Mail, CreditCard, Receipt, Image, Sun, CloudRain, Send, ExternalLink, Layers } from 'lucide-react';
 import { CLIENT_WORK_CATALOG } from '../constants';
 import { loadPriceOverrides, getRecommendedPrice } from '../services/priceListService';
 import { analyzeProfitability, generateSmartEstimate, generateClientEstimateAI, generateMilestonesAI, hasApiKey } from '../services/geminiService';
@@ -10,7 +10,9 @@ import { buildPromptFromWizard } from '../services/wizardPromptBuilder';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { ChatWidget } from './ChatWidget';
 import { CommercialProposal } from './CommercialProposal';
+import { MaterialWorkProposal } from './MaterialWorkProposal';
 import { loadPricingRules } from '../services/pricingRulesService';
+import { buildClientEstimate } from '../services/clientEstimateBuilder';
 
 interface ProjectDetailProps {
   project: Project;
@@ -79,6 +81,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
   }, [wizardData, project.id]);
 
   const [showKPPreview, setShowKPPreview] = useState(false);
+  const [showMaterialWorkPreview, setShowMaterialWorkPreview] = useState(false);
   const [isGeneratingMilestones, setIsGeneratingMilestones] = useState(false);
   const [showAmendmentForm, setShowAmendmentForm] = useState(false);
   const [amendmentPrice, setAmendmentPrice] = useState('');
@@ -501,70 +504,36 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
     onUpdate({ ...project, clientEstimateItems: arr });
   };
 
-  const handleGenerateClientEstimate = async () => {
+  const handleGenerateClientEstimate = () => {
     if (project.items.length === 0) {
       alert('Сначала заполните себестоимость (внутреннюю смету).');
       return;
     }
-    if (!hasApiKey()) {
-      alert('Для ИИ-генерации КП настройте API-ключ AI в настройках (иконка шестерёнки вверху).');
-      return;
-    }
 
-    setIsGeneratingKP(true);
     try {
-      const overrides = loadPriceOverrides();
-      const area = project.areaSize || 1;
+      // Если в wizardData нет площади — берём из проекта
+      const wd = { ...wizardData, works: { ...wizardData.works } };
+      if (wd.area <= 0 && project.areaSize > 0) {
+        wd.area = project.areaSize;
+      }
+      // Если нет выбранных работ — включаем основание+асфальт по умолчанию
+      if (!Object.values(wd.works).some(Boolean)) {
+        wd.works.foundation = true;
+        wd.works.asphalt = true;
+      }
 
-      // Подготовка данных внутренней сметы
-      const internalItems = project.items.map(item => {
-        const res = resources.find(r => r.id === item.resourceId);
-        return {
-          resourceName: res?.name || item.customName || '',
-          category: res?.category || item.category || '',
-          unit: item.customUnit || res?.unit || 'ед.',
-          quantity: item.quantity,
-          costPerUnit: res?.costPerUnit || 0,
-          totalCost: item.totalCost,
-        };
-      });
+      const generated = buildClientEstimate(wd, project.items, clientMarginPercent);
 
-      // Каталог работ с ценами (с учётом пользовательских переопределений)
-      const catalogWithPrices = CLIENT_WORK_CATALOG
-        .map(c => {
-          const price = overrides.get(c.name) ?? c.recommendedPrice;
-          return price !== undefined
-            ? `${c.name} | ${c.unit} | ${price} ₽ | ${c.section}`
-            : null;
-        })
-        .filter(Boolean)
-        .join('\n');
-
-      const result = await generateClientEstimateAI(internalItems, catalogWithPrices, area, clientMarginPercent, loadPricingRules());
-
-      // Преобразуем в ClientEstimateItem[]
-      const generated: ClientEstimateItem[] = result.map((item, i) => {
-        const unitPrice = Math.round(item.unitPrice || 0);
-        const qty = item.quantity || 1;
-        return {
-          id: generateId(),
-          name: item.name || '',
-          unit: item.unit || 'ед.',
-          quantity: qty,
-          unitPrice,
-          totalPrice: unitPrice * qty,
-          section: item.section || 'Прочие работы',
-          sortOrder: i,
-        };
-      });
+      if (generated.length === 0) {
+        alert(`Не удалось сформировать КП.\nПлощадь: ${wd.area} м²\nПроверьте ТЗ проекта.`);
+        return;
+      }
 
       onUpdate({ ...project, clientEstimateItems: generated });
       setEstimateSubTab('client');
     } catch (error: any) {
-      console.error('AI KP generation error:', error);
-      alert(`Ошибка ИИ-генерации: ${error.message || 'Попробуйте ещё раз.'}`);
-    } finally {
-      setIsGeneratingKP(false);
+      console.error('KP build error:', error);
+      alert(`Ошибка формирования КП: ${error.message || error}`);
     }
   };
 
@@ -592,12 +561,12 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
   return (
     <div className="space-y-6 pb-20">
       {/* Tab Navigation */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-1.5 flex gap-1 overflow-x-auto">
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-1.5 flex gap-1 overflow-x-auto hide-scrollbar snap-x">
         {tabs.map(tab => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${
+            className={`flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-bold transition-all whitespace-nowrap snap-start shrink-0 ${
               activeTab === tab.id ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'
             }`}
           >
@@ -650,14 +619,14 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
           <section className="bg-slate-900 rounded-2xl shadow-xl border border-slate-800 overflow-hidden relative">
             {/* Заголовок — всегда видим */}
             <div
-              className="flex items-center justify-between px-6 py-4 cursor-pointer hover:bg-slate-800/50 transition-colors"
+              className="flex items-center justify-between px-4 sm:px-6 py-4 cursor-pointer hover:bg-slate-800/50 transition-colors"
               onClick={() => setWizardCollapsed(!wizardCollapsed)}
             >
               <div className="flex items-center gap-2">
-                <div className="bg-orange-500 p-2 rounded-lg"><Sparkles className="text-white" size={20} /></div>
-                <div>
-                  <h3 className="text-white font-bold text-lg">Умный AI-Ассистент</h3>
-                  <p className="text-slate-400 text-xs">
+                <div className="bg-orange-500 p-2 rounded-lg shrink-0"><Sparkles className="text-white" size={20} /></div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-white font-bold text-base sm:text-lg truncate">Умный AI-Ассистент</h3>
+                  <p className="text-slate-400 text-[10px] sm:text-xs truncate">
                     {wizardCollapsed
                       ? `Шаг ${wizardStep}/3 · ${Object.values(wizardData.works).filter(Boolean).length} видов работ · ${wizardData.area || 0} м²`
                       : (wizardMode ? 'Выберите параметры — AI подберёт ресурсы' : 'Опишите задачу свободным текстом')
@@ -665,9 +634,9 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 {!wizardCollapsed && (
-                  <div className="flex bg-slate-800 rounded-lg p-0.5" onClick={e => e.stopPropagation()}>
+                  <div className="hidden sm:flex bg-slate-800 rounded-lg p-0.5" onClick={e => e.stopPropagation()}>
                     <button onClick={() => setWizardMode(true)}
                       className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${wizardMode ? 'bg-orange-600 text-white' : 'text-slate-400 hover:text-slate-300'}`}>
                       Мастер
@@ -686,7 +655,19 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
 
             {/* Тело — сворачивается */}
             {!wizardCollapsed && (
-              <div className="px-6 pb-6 relative">
+              <div className="px-4 sm:px-6 pb-6 relative">
+                {/* Mobile Toggle inside */}
+                <div className="sm:hidden flex bg-slate-800 rounded-lg p-0.5 mb-4 max-w-fit">
+                  <button onClick={() => setWizardMode(true)}
+                    className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex-1 ${wizardMode ? 'bg-orange-600 text-white' : 'text-slate-400 hover:text-slate-300'}`}>
+                    Мастер
+                  </button>
+                  <button onClick={() => setWizardMode(false)}
+                    className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex-1 ${!wizardMode ? 'bg-orange-600 text-white' : 'text-slate-400 hover:text-slate-300'}`}>
+                    Текст
+                  </button>
+                </div>
+                
                 <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none"><Wand2 size={120} className="text-orange-500 rotate-12" /></div>
                 <div className="relative z-10">
                   {wizardMode ? (
@@ -699,16 +680,16 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
                       isGenerating={isGenerating}
                     />
                   ) : (
-                    <div className="flex flex-col md:flex-row gap-3">
+                    <div className="flex flex-col gap-3">
                       <textarea
-                        className="flex-1 bg-slate-800 border-slate-700 border rounded-xl p-3 text-slate-200 text-sm focus:ring-2 focus:ring-orange-500 outline-none placeholder:text-slate-500 min-h-[80px]"
+                        className="w-full bg-slate-800 border-slate-700 border rounded-xl p-3 text-slate-200 text-sm focus:ring-2 focus:ring-orange-500 outline-none placeholder:text-slate-500 min-h-[100px]"
                         placeholder="Пример: Нужно заасфальтировать двор 250 м2 мелкозернистым асфальтом, установить бордюры и посыпать песком."
                         value={aiPrompt}
                         onChange={(e) => setAiPrompt(e.target.value)}
                       />
                       <button onClick={handleAiGenerateEstimate} disabled={isGenerating || !aiPrompt.trim()}
-                        className="bg-orange-600 hover:bg-orange-500 disabled:bg-slate-700 text-white font-bold px-6 py-3 rounded-xl transition-all flex flex-col items-center justify-center gap-1 min-w-[160px]">
-                        {isGenerating ? <Loader2 className="animate-spin" /> : <><Wand2 size={20} /><span className="text-xs">Создать смету</span></>}
+                        className="bg-orange-600 hover:bg-orange-500 disabled:bg-slate-700 text-white font-bold w-full py-4 rounded-xl transition-all flex items-center justify-center gap-2">
+                        {isGenerating ? <Loader2 className="animate-spin" /> : <><Wand2 size={20} /><span>Создать смету</span></>}
                       </button>
                     </div>
                   )}
@@ -744,6 +725,58 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
                 {wizardData.soilDisposal === 'spread' && wizardData.works.earthwork && <span className="bg-orange-500/15 text-orange-300 text-[10px] font-bold px-2 py-1 rounded-lg">Планировка грунта</span>}
                 {wizardData.soilDisposal === 'both' && wizardData.works.earthwork && <span className="bg-orange-500/15 text-orange-300 text-[10px] font-bold px-2 py-1 rounded-lg">Вывоз + планировка</span>}
               </div>
+
+              {/* Расчётные объёмы */}
+              {(() => {
+                const d2 = wizardData;
+                const a = d2.area;
+                const vols: { label: string; value: string; color: string }[] = [];
+                if (d2.works.earthwork) {
+                  let vol: number;
+                  if (d2.excavationDepthMode === 'manual' && d2.excavationManualUnit === 'm3') {
+                    vol = d2.excavationVolumeM3;
+                  } else {
+                    const depMm = d2.excavationDepthMode === 'manual' ? d2.excavationDepthCm * 10
+                      : (d2.works.foundation ? d2.sandLayer + d2.gravelLayer : 0) + (d2.works.asphalt ? (d2.asphaltLayers === 2 ? d2.asphaltThickness + d2.asphaltBottomThickness : d2.asphaltThickness) : 0);
+                    vol = a * (depMm / 1000) * 1.25;
+                  }
+                  vols.push({ label: 'Выемка грунта', value: `${Math.round(vol)} м³`, color: 'text-amber-400' });
+                  vols.push({ label: 'Рейсов вывоза', value: `${Math.ceil(vol / 20)} рейс.`, color: 'text-amber-300' });
+                }
+                if (d2.works.foundation && d2.sandLayer > 0) {
+                  vols.push({ label: 'Песок', value: `${Math.round(a * (d2.sandLayer / 1000) * 1.2)} м³`, color: 'text-yellow-400' });
+                }
+                if (d2.works.foundation && d2.gravelLayer > 0) {
+                  vols.push({ label: 'Щебень', value: `${Math.round(a * (d2.gravelLayer / 1000) * 1.3)} м³`, color: 'text-yellow-300' });
+                }
+                if (d2.works.asphalt) {
+                  let tons: number;
+                  if (d2.asphaltLayers === 2) {
+                    tons = a * (d2.asphaltThickness / 1000) * 2.5 + a * (d2.asphaltBottomThickness / 1000) * 2.5;
+                  } else {
+                    tons = a * (d2.asphaltThickness / 1000) * 2.5;
+                  }
+                  vols.push({ label: 'А/б смесь', value: `${Math.round(tons)} т`, color: 'text-slate-300' });
+                  vols.push({ label: 'Доставка а/б', value: `${Math.ceil(tons / 30)} рейс.`, color: 'text-slate-400' });
+                }
+                if (d2.works.foundation && d2.geotextileDensity > 0) {
+                  vols.push({ label: 'Геотекстиль', value: `${a} м²`, color: 'text-blue-300' });
+                }
+                if (vols.length === 0) return null;
+                return (
+                  <div className="bg-slate-800/60 rounded-xl p-3 space-y-1.5">
+                    <p className="text-[10px] font-bold text-orange-300 uppercase tracking-widest mb-1">Расчётные объёмы</p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1">
+                      {vols.map((v, i) => (
+                        <div key={i} className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] text-slate-400">{v.label}</span>
+                          <span className={`text-xs font-bold ${v.color}`}>{v.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Этапы по дням — показываем после генерации сметы */}
               {project.items.length > 0 && (() => {
@@ -1023,7 +1056,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
                       <Pie data={chartData} cx="50%" cy="50%" innerRadius={40} outerRadius={60} paddingAngle={5} dataKey="value">
                         {chartData.map((_, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
                       </Pie>
-                      <Tooltip formatter={(value: number) => formatPrice(value)} />
+                      <Tooltip formatter={(value: number | string | undefined) => formatPrice(Number(value || 0))} />
                       <Legend />
                     </PieChart>
                   </ResponsiveContainer>
@@ -1092,24 +1125,19 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
                 <section className="bg-slate-900 rounded-xl shadow-lg overflow-hidden">
                   <div className="p-4 flex flex-col sm:flex-row items-center gap-4">
                     <div className="flex-1">
-                      <h3 className="text-white font-bold text-sm flex items-center gap-2"><Sparkles size={16} className="text-orange-400" /> ИИ-генерация КП</h3>
-                      <p className="text-slate-400 text-xs mt-1">ИИ подберёт работы из каталога, применит цены из прайс-листа и наценку</p>
+                      <h3 className="text-white font-bold text-sm flex items-center gap-2"><Sparkles size={16} className="text-orange-400" /> Генерация КП</h3>
+                      <p className="text-slate-400 text-xs mt-1">Объёмы из ТЗ × прайс-лист × наценка + правила КП</p>
                     </div>
                     <div className="flex items-center gap-3">
                       <div className="flex items-center gap-2">
                         <span className="text-slate-400 text-xs">Наценка</span>
                         <input type="number" className="w-16 bg-slate-800 border border-slate-700 text-white text-sm rounded-lg px-2 py-1.5 text-center outline-none focus:ring-2 focus:ring-orange-500"
-                          value={clientMarginPercent} onChange={(e) => setClientMarginPercent(Number(e.target.value))} min={0} max={200}
-                          disabled={isGeneratingKP} />
+                          value={clientMarginPercent} onChange={(e) => setClientMarginPercent(Number(e.target.value))} min={0} max={200} />
                         <span className="text-slate-400 text-xs">%</span>
                       </div>
-                      <button onClick={handleGenerateClientEstimate} disabled={isGeneratingKP}
-                        className="bg-orange-600 hover:bg-orange-500 disabled:bg-slate-700 text-white text-xs font-bold px-4 py-2 rounded-lg transition-colors whitespace-nowrap flex items-center gap-2">
-                        {isGeneratingKP ? (
-                          <><Loader2 size={14} className="animate-spin" /> Генерация...</>
-                        ) : (
-                          <><Sparkles size={14} /> Сформировать</>
-                        )}
+                      <button onClick={handleGenerateClientEstimate}
+                        className="bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold px-4 py-2 rounded-lg transition-colors whitespace-nowrap flex items-center gap-2">
+                        <Sparkles size={14} /> Сформировать
                       </button>
                     </div>
                   </div>
@@ -1302,6 +1330,14 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
                   >
                     <Eye size={20} />
                     Предпросмотр КП
+                  </button>
+                  <button
+                    onClick={() => setShowMaterialWorkPreview(true)}
+                    disabled={clientEstimateItems.length === 0}
+                    className="w-full bg-blue-700 hover:bg-blue-600 disabled:bg-slate-300 text-white py-4 rounded-xl font-black text-sm flex items-center justify-center gap-3 transition-all shadow-lg active:scale-[0.98] uppercase tracking-wider"
+                  >
+                    <Layers size={20} />
+                    Смета: Материалы и Работа
                   </button>
                   <button
                     onClick={handleIssueClientEstimate}
@@ -1880,7 +1916,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                     <YAxis tick={{ fontSize: 11 }} />
-                    <Tooltip formatter={(value: number) => formatPrice(value)} />
+                    <Tooltip formatter={(value: number | string | undefined) => formatPrice(Number(value || 0))} />
                     <Bar dataKey="value" fill="#f97316" radius={[8, 8, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -2165,6 +2201,14 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
             handleIssueClientEstimate();
             setShowKPPreview(false);
           }}
+        />
+      )}
+
+      {/* Смета: Материалы и Работа */}
+      {showMaterialWorkPreview && (
+        <MaterialWorkProposal
+          project={project}
+          onClose={() => setShowMaterialWorkPreview(false)}
         />
       )}
     </div>

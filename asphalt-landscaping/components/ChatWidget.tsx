@@ -54,7 +54,7 @@ export const ChatWidget: React.FC<ChatWidgetProps> = ({ messages, currentUserRol
   };
 
   return (
-    <div className="flex flex-col h-[500px] bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+    <div className="flex flex-col h-[calc(100vh-140px)] min-h-[400px] bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
       {/* Header */}
       <div className="p-4 bg-slate-50 border-b font-semibold text-slate-700 flex justify-between items-center">
         <span className="flex items-center gap-2">

@@ -164,6 +164,7 @@ export const generateClientEstimateAI = async (
 ): Promise<Array<{ name: string; unit: string; quantity: number; unitPrice: number; section: string }>> => {
 
   const totalInternalCost = internalItems.reduce((s, i) => s + i.totalCost, 0);
+  const targetTotal = Math.round(totalInternalCost * (1 + markupPercent / 100));
 
   const text = await callAI(
     PROMPT_CLIENT_ESTIMATE_SYSTEM,
@@ -175,6 +176,7 @@ export const generateClientEstimateAI = async (
       area,
       markupPercent,
       totalInternalCost,
+      targetTotal,
       pricingRules,
     }),
     true,

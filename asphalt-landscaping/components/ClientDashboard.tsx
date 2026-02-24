@@ -10,7 +10,7 @@ import {
   CheckCircle, ChevronDown, Download, Phone,
   DollarSign, Clock, Eye, Star, X, CreditCard, Activity,
   BarChart3, ArrowRight, Mail, CalendarDays, Shield,
-  Building2, ChevronRight, TrendingUp, Sparkles, BookOpen,
+  Building2, ChevronRight, TrendingUp, Sparkles, BookOpen, LogOut
 } from 'lucide-react';
 import { ChatWidget } from './ChatWidget';
 import { CommercialProposal } from './CommercialProposal';
@@ -21,11 +21,13 @@ interface ClientDashboardProps {
   project: Project;
   resources: Resource[];
   onUpdateProject: (p: Project) => void;
+  onLogout?: () => void;
+  onChangeProject?: () => void;
 }
 
 type TabId = 'overview' | 'gallery' | 'finance' | 'docs' | 'calc' | 'norms' | 'chat';
 
-export const ClientDashboard: React.FC<ClientDashboardProps> = ({ project, resources, onUpdateProject }) => {
+export const ClientDashboard: React.FC<ClientDashboardProps> = ({ project, resources, onUpdateProject, onLogout, onChangeProject }) => {
   const [activeTab, setActiveTab] = useState<TabId>('overview');
   const [viewingPhoto, setViewingPhoto] = useState<ProjectPhoto | null>(null);
   const [galleryFilter, setGalleryFilter] = useState<string>('all');
@@ -95,12 +97,27 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ project, resou
         </div>
 
         <div className="relative z-10 max-w-5xl mx-auto px-5 py-6 sm:px-8 sm:py-8">
-          {/* Company badge */}
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
-              <Building2 size={16} />
+          {/* Company badge & Controls */}
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
+                <Building2 size={16} />
+              </div>
+              <span className="text-xs font-bold uppercase tracking-widest text-emerald-200">Транском</span>
             </div>
-            <span className="text-xs font-bold uppercase tracking-widest text-emerald-200">Транском</span>
+            
+            <div className="flex items-center gap-2">
+              {onChangeProject && (
+                <button onClick={onChangeProject} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-colors flex items-center gap-1 text-xs font-bold">
+                  <ChevronDown size={14} /> Проекты
+                </button>
+              )}
+              {onLogout && (
+                <button onClick={onLogout} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-colors">
+                  <LogOut size={16} />
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Project info */}
@@ -286,17 +303,17 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ project, resou
             </div>
 
             {/* Financial summary mini */}
-            <div className="grid grid-cols-3 gap-3">
-              <div className="bg-white rounded-xl p-4 border border-slate-100 text-center">
-                <p className="text-[10px] font-bold uppercase text-slate-400">Договор</p>
+            <div className="flex overflow-x-auto snap-x snap-mandatory gap-3 pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 sm:grid sm:grid-cols-3">
+              <div className="bg-white rounded-xl p-4 border border-slate-100 text-center min-w-[140px] snap-center shrink-0">
+                <p className="text-xs font-bold uppercase text-slate-400">Договор</p>
                 <p className="text-lg font-black text-slate-900">{formatPrice(project.contractPrice)}</p>
               </div>
-              <div className="bg-white rounded-xl p-4 border border-slate-100 text-center">
-                <p className="text-[10px] font-bold uppercase text-slate-400">Оплачено</p>
+              <div className="bg-white rounded-xl p-4 border border-slate-100 text-center min-w-[140px] snap-center shrink-0">
+                <p className="text-xs font-bold uppercase text-slate-400">Оплачено</p>
                 <p className="text-lg font-black text-green-600">{formatPrice(totalPaid)}</p>
               </div>
-              <div className="bg-white rounded-xl p-4 border border-slate-100 text-center">
-                <p className="text-[10px] font-bold uppercase text-slate-400">Остаток</p>
+              <div className="bg-white rounded-xl p-4 border border-slate-100 text-center min-w-[140px] snap-center shrink-0">
+                <p className="text-xs font-bold uppercase text-slate-400">Остаток</p>
                 <p className="text-lg font-black text-orange-600">{formatPrice(project.contractPrice - totalPaid)}</p>
               </div>
             </div>

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { LayoutDashboard, BookOpen, FileText, BarChart3, TrendingUp, Users, LogOut, HardHat, Briefcase, UserCircle, Plus, Wallet, AlertCircle, ChevronDown, Settings, Key, X, ExternalLink } from 'lucide-react';
+import { LayoutDashboard, BookOpen, FileText, BarChart3, TrendingUp, Users, LogOut, HardHat, Briefcase, UserCircle, Plus, Wallet, AlertCircle, ChevronDown, Settings, Key, X, ExternalLink, Menu } from 'lucide-react';
 import { Project, Resource, UserRole, Milestone, ServiceCategory, AsphaltWorkType, formatPrice } from './types';
 import { INITIAL_RESOURCES, MOCK_PROJECT } from './constants';
 import { ProjectList } from './components/ProjectList';
@@ -162,8 +162,9 @@ const App: React.FC = () => {
 
   // Project selector component for foreman/client
   const ProjectSelector = ({ onClose }: { onClose: () => void }) => (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl max-w-md w-full max-h-[70vh] overflow-y-auto p-6" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+      <div className="bg-white rounded-t-3xl sm:rounded-2xl max-w-md w-full max-h-[85vh] overflow-y-auto p-6 animate-slideUp" onClick={e => e.stopPropagation()}>
+        <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-6 sm:hidden" />
         <h3 className="text-lg font-bold text-slate-800 mb-4">Выберите объект</h3>
         <div className="space-y-2">
           {projects.filter(p => p.status === 'active' || p.status === 'draft').map(p => (
@@ -245,18 +246,13 @@ const App: React.FC = () => {
   if (currentUserRole === 'client') {
     return (
       <>
-        <ClientDashboard project={activeProject || MOCK_PROJECT} resources={resources} onUpdateProject={handleUpdateProject} />
-        <div className="fixed bottom-6 right-6 flex gap-2 z-50">
-          {projects.length > 1 && (
-            <button onClick={() => setShowProjectSelector(true)}
-              className="bg-slate-900 text-white px-4 py-3 rounded-full shadow-2xl hover:bg-black transition-colors text-xs font-bold flex items-center gap-2">
-              <ChevronDown size={14} /> {(activeProject || MOCK_PROJECT).name}
-            </button>
-          )}
-          <button onClick={() => setCurrentUserRole(null)} className="bg-slate-900 text-white p-4 rounded-full shadow-2xl hover:bg-black transition-colors">
-            <LogOut size={20} />
-          </button>
-        </div>
+        <ClientDashboard 
+          project={activeProject || MOCK_PROJECT} 
+          resources={resources} 
+          onUpdateProject={handleUpdateProject}
+          onLogout={() => setCurrentUserRole(null)}
+          onChangeProject={projects.length > 1 ? () => setShowProjectSelector(true) : undefined}
+        />
         {showProjectSelector && <ProjectSelector onClose={() => setShowProjectSelector(false)} />}
       </>
     );
@@ -265,26 +261,21 @@ const App: React.FC = () => {
   if (currentUserRole === 'foreman') {
     return (
       <>
-        <ForemanDashboard project={activeProject || MOCK_PROJECT} onUpdateProject={handleUpdateProject} />
-        <div className="fixed bottom-6 right-6 flex gap-2 z-50">
-          {projects.length > 1 && (
-            <button onClick={() => setShowProjectSelector(true)}
-              className="bg-slate-900/60 text-white px-3 py-2 rounded-full shadow-xl hover:bg-black transition-colors text-[10px] font-bold flex items-center gap-1 opacity-50 hover:opacity-100">
-              <ChevronDown size={12} /> Объект
-            </button>
-          )}
-          <button onClick={() => setCurrentUserRole(null)} className="bg-slate-900 text-white p-4 rounded-full shadow-2xl hover:bg-black transition-colors opacity-40 hover:opacity-100">
-            <LogOut size={20} />
-          </button>
-        </div>
+        <ForemanDashboard 
+          project={activeProject || MOCK_PROJECT} 
+          onUpdateProject={handleUpdateProject}
+          onLogout={() => setCurrentUserRole(null)}
+          onChangeProject={projects.length > 1 ? () => setShowProjectSelector(true) : undefined}
+        />
         {showProjectSelector && <ProjectSelector onClose={() => setShowProjectSelector(false)} />}
       </>
     );
   }
 
   return (
-    <div className="flex h-screen bg-[#F1F5F9]">
-      <aside className="w-72 bg-[#0F172A] text-white flex flex-col p-6 shadow-2xl">
+    <div className="flex h-[100dvh] bg-[#F1F5F9] md:pb-0">
+      {/* Desktop Sidebar */}
+      <aside className="hidden md:flex w-72 bg-[#0F172A] text-white flex-col p-6 shadow-2xl z-40">
         <div className="mb-12">
           <h1 className="text-3xl font-black italic tracking-tighter text-orange-500">AsphaltPro</h1>
           <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-slate-500 mt-2">Executive Office</p>
@@ -332,26 +323,64 @@ const App: React.FC = () => {
         </div>
       </aside>
 
-      <main className="flex-1 overflow-y-auto">
-        <header className="bg-white/80 backdrop-blur-md border-b px-10 py-6 sticky top-0 z-30 flex justify-between items-center">
-          <h2 className="text-2xl font-black text-slate-800 tracking-tight">
+      {/* Mobile Bottom Nav */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-[#0F172A] text-white flex justify-between items-end px-2 py-2 pb-safe z-40 shadow-[0_-4px_25px_rgba(0,0,0,0.15)]">
+        {[
+          { id: 'dashboard', icon: LayoutDashboard, label: 'Дашборд' },
+          { id: 'directories', icon: BookOpen, label: 'Справочник' },
+          { id: 'detail', icon: FileText, label: 'Проект' },
+        ].map(item => (
+          <button
+            key={item.id}
+            onClick={() => setActiveTab(item.id as any)}
+            className={`flex flex-col items-center gap-1 w-20 py-2 rounded-2xl transition-all relative ${
+              activeTab === item.id ? 'text-orange-500 scale-105' : 'text-slate-400 hover:text-slate-300'
+            }`}
+          >
+            <item.icon size={22} className={activeTab === item.id ? 'stroke-[2.5px]' : 'stroke-2'} />
+            <span className="text-[9px] font-bold uppercase tracking-wider">{item.label}</span>
+          </button>
+        ))}
+        {/* Logout on mobile */}
+        <button
+          onClick={() => setCurrentUserRole(null)}
+          className="flex flex-col items-center gap-1 w-16 py-2 text-slate-500 hover:text-red-400 transition-colors"
+        >
+          <LogOut size={20} />
+          <span className="text-[9px] font-bold uppercase tracking-wider">Выход</span>
+        </button>
+      </nav>
+
+      {/* Mobile Add FAB */}
+      {activeTab === 'dashboard' && (
+        <button
+          onClick={handleAddProject}
+          className="md:hidden fixed bottom-20 right-4 z-40 bg-orange-600 text-white w-14 h-14 rounded-full flex items-center justify-center shadow-lg shadow-orange-900/40 hover:bg-orange-500 active:scale-95 transition-all"
+        >
+          <Plus size={24} />
+        </button>
+      )}
+
+      <main className="flex-1 overflow-y-auto pb-20 md:pb-0">
+        <header className="bg-white/80 backdrop-blur-md border-b px-4 sm:px-10 py-4 sm:py-6 sticky top-0 z-30 flex justify-between items-center">
+          <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">
             {activeTab === 'dashboard' ? 'Глобальный Дашборд' : activeTab === 'directories' ? 'Управление Ресурсами' : 'Редактор Проекта'}
           </h2>
-          <div className="flex items-center gap-6">
+          <div className="flex items-center gap-3 sm:gap-6">
             <div className="text-right hidden sm:block">
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Авторизован как</p>
               <p className="text-sm font-bold text-slate-700">Алексей Смирнов</p>
             </div>
             <button onClick={() => { setCurrentProvider(getProvider()); setGrokKeyInput(getGrokKey()); setGroqKeyInput(getGroqKey()); setShowSettings(true); }}
-              className={`w-12 h-12 rounded-2xl flex items-center justify-center border transition-colors ${hasApiKey() ? 'bg-green-50 text-green-600 border-green-200 hover:bg-green-100' : 'bg-orange-50 text-orange-500 border-orange-200 hover:bg-orange-100'}`}
+              className={`w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center border transition-colors ${hasApiKey() ? 'bg-green-50 text-green-600 border-green-200 hover:bg-green-100' : 'bg-orange-50 text-orange-500 border-orange-200 hover:bg-orange-100'}`}
               title="Настройки AI">
               <Settings size={20} />
             </button>
-            <div className="w-12 h-12 bg-slate-100 rounded-2xl flex items-center justify-center text-slate-400 border border-slate-200"><Users size={24} /></div>
+            <div className="hidden sm:flex w-12 h-12 bg-slate-100 rounded-2xl items-center justify-center text-slate-400 border border-slate-200"><Users size={24} /></div>
           </div>
         </header>
 
-        <div className="p-10 max-w-7xl mx-auto">
+        <div className="p-4 sm:p-10 max-w-7xl mx-auto">
           {activeTab === 'dashboard' && (
             <div className="space-y-10">
               {/* Global Stats Grid */}

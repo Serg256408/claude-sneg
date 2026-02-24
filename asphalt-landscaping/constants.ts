@@ -67,10 +67,10 @@ export const INITIAL_RESOURCES: Resource[] = [
   // ТЕХНИКА — Асфальтирование
   // ═══════════════════════════════════════════════════════════
   { id: 'eq1', name: 'Асфальтоукладчик гусеничный, ширина укладки 2.5–5.0 м', category: Category.MACHINERY, unit: 'м/см', costPerUnit: 110000, serviceCategory: ServiceCategory.ASPHALT, subGroup: 'Асфальтирование' },
-  { id: 'eq2', name: 'Каток вибрационный тандемный 4 т (асфальтовый), ширина вальца 1.2 м', category: Category.MACHINERY, unit: 'м/см', costPerUnit: 25000, serviceCategory: ServiceCategory.ASPHALT, subGroup: 'Асфальтирование' },
+  { id: 'eq2', name: 'Каток вибрационный тандемный 4 т (асфальтовый), ширина вальца 1.2 м, с доставкой на объект', category: Category.MACHINERY, unit: 'м/см', costPerUnit: 25000, serviceCategory: ServiceCategory.ASPHALT, subGroup: 'Асфальтирование' },
   { id: 'eq8', name: 'Доставка а/б смеси самосвалом до 30 т', category: Category.MACHINERY, unit: 'рейс', costPerUnit: 15000, serviceCategory: ServiceCategory.ASPHALT, subGroup: 'Асфальтирование' },
   { id: 'eq14', name: 'Доставка асфальтоукладчика на объект и обратно (тралом)', category: Category.MACHINERY, unit: 'компл.', costPerUnit: 50000, serviceCategory: ServiceCategory.ASPHALT, subGroup: 'Асфальтирование' },
-  { id: 'eq15', name: 'Доставка катка асфальтового на объект и обратно', category: Category.MACHINERY, unit: 'компл.', costPerUnit: 30000, serviceCategory: ServiceCategory.ASPHALT, subGroup: 'Асфальтирование' },
+  // eq15 убран — доставка катка 4т включена в стоимость аренды (eq2)
 
   // ═══════════════════════════════════════════════════════════
   // ТЕХНИКА — Демонтаж
@@ -83,7 +83,7 @@ export const INITIAL_RESOURCES: Resource[] = [
   // ═══════════════════════════════════════════════════════════
   // ТЕХНИКА — Земляные работы
   // ═══════════════════════════════════════════════════════════
-  { id: 'eq3', name: 'Экскаватор-погрузчик JCB 3CX, ёмкость ковша 1.0 м³, глубина копания до 4.7 м', category: Category.MACHINERY, unit: 'м/см', costPerUnit: 28000, serviceCategory: ServiceCategory.EARTHWORK, subGroup: 'Земляные работы' },
+  { id: 'eq3', name: 'Экскаватор-погрузчик JCB 3CX, ёмкость ковша 1.0 м³, глубина копания до 4.7 м (приезжает своим ходом, без доставки)', category: Category.MACHINERY, unit: 'м/см', costPerUnit: 28000, serviceCategory: ServiceCategory.EARTHWORK, subGroup: 'Земляные работы' },
   { id: 'eq10', name: 'Экскаватор гусеничный 20 т, ёмкость ковша 1.2 м³', category: Category.MACHINERY, unit: 'м/см', costPerUnit: 27000, serviceCategory: ServiceCategory.EARTHWORK, subGroup: 'Земляные работы' },
   { id: 'eq4', name: 'Самосвал, вывоз грунта / строит. мусора, кузов 20 м³, плечо до 30 км', category: Category.MACHINERY, unit: 'рейс', costPerUnit: 14000, serviceCategory: ServiceCategory.EARTHWORK, subGroup: 'Земляные работы' },
   { id: 'eq9', name: 'Каток грунтовый вибрационный тяжёлый 10+ т, уплотнение основания — песок, щебень', category: Category.MACHINERY, unit: 'м/см', costPerUnit: 25000, serviceCategory: ServiceCategory.EARTHWORK, subGroup: 'Земляные работы' },
@@ -257,7 +257,15 @@ export const CLIENT_WORK_CATALOG: ClientWorkCatalogItem[] = [
   { name: 'Устройство основания из щебня гранитного фр. 20–40 мм М1200, ГОСТ 8267-93, толщ. 200 мм, Ку≥0.98, Еd≥130 МПа', unit: 'м²', section: 'Устройство основания', recommendedPrice: 650 },
   { name: 'Устройство основания из щебня гравийного фр. 20–40 мм М800, ГОСТ 8267-93, толщ. 200 мм, Ку≥0.98', unit: 'м²', section: 'Устройство основания', recommendedPrice: 500 },
   { name: 'Устройство основания из щебня вторичного (дроблёный бетон) фр. 20–40 мм, ТУ, толщ. 200 мм, Ку≥0.95', unit: 'м²', section: 'Устройство основания', recommendedPrice: 350 },
+  { name: 'Устройство основания из щебня известнякового фр. 20–40 мм М600, ГОСТ 8267-93, толщ. 150 мм, Ку≥0.98', unit: 'м²', section: 'Устройство основания', recommendedPrice: 450 },
+  { name: 'Устройство основания из щебня известнякового фр. 20–40 мм М600, ГОСТ 8267-93, толщ. 200 мм, Ку≥0.98', unit: 'м²', section: 'Устройство основания', recommendedPrice: 580 },
   { name: 'Устройство основания из ПГС (песчано-гравийная смесь), ГОСТ 23735-2014, толщ. 200 мм, Ку≥0.95', unit: 'м²', section: 'Устройство основания', recommendedPrice: 400 },
+  // Сыпучие материалы — справочные цены за м³
+  { name: 'Песок средней крупности Мкр≥2.0, ГОСТ 8736-2014 (материал + доставка + укладка)', unit: 'м³', section: 'Устройство основания', recommendedPrice: 1300 },
+  { name: 'Щебень гранитный фр. 20–40 мм М1200, ГОСТ 8267-93 (материал + доставка + укладка)', unit: 'м³', section: 'Устройство основания', recommendedPrice: 4200 },
+  { name: 'Щебень известняковый фр. 20–40 мм М600, ГОСТ 8267-93 (материал + доставка + укладка)', unit: 'м³', section: 'Устройство основания', recommendedPrice: 3300 },
+  { name: 'Щебень гравийный фр. 20–40 мм М800, ГОСТ 8267-93 (материал + доставка + укладка)', unit: 'м³', section: 'Устройство основания', recommendedPrice: 3500 },
+  { name: 'Щебень вторичный (дроблёный бетон) фр. 20–40 мм, ТУ (материал + доставка + укладка)', unit: 'м³', section: 'Устройство основания', recommendedPrice: 2000 },
   { name: 'Укладка геотекстиля иглопробивного плотн. 200 г/м², ГОСТ Р 56338-2015, разделительный слой', unit: 'м²', section: 'Устройство основания', recommendedPrice: 80 },
   { name: 'Укладка геотекстиля иглопробивного плотн. 300 г/м², ГОСТ Р 56338-2015, армирующий слой', unit: 'м²', section: 'Устройство основания', recommendedPrice: 120 },
   { name: 'Укладка георешётки полимерной, высота ячейки 100 мм, армирование слабого основания', unit: 'м²', section: 'Устройство основания', recommendedPrice: 350 },

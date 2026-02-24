@@ -8,7 +8,7 @@ import {
 import {
   Camera, Plus, CheckCircle, Clock, MapPin, DollarSign, MessageSquare,
   ChevronRight, ListChecks, Image, FileText, CloudSun, Send, Trash2,
-  X, ChevronDown, AlertTriangle, Receipt, Users, Thermometer, BookOpen,
+  X, ChevronDown, AlertTriangle, Receipt, Users, Thermometer, BookOpen, LogOut,
 } from 'lucide-react';
 import { ChatWidget } from './ChatWidget';
 import { ConstructionReference } from './ConstructionReference';
@@ -16,11 +16,13 @@ import { ConstructionReference } from './ConstructionReference';
 interface ForemanDashboardProps {
   project: Project;
   onUpdateProject: (p: Project) => void;
+  onLogout?: () => void;
+  onChangeProject?: () => void;
 }
 
 type TabId = 'tasks' | 'photos' | 'expenses' | 'report' | 'norms' | 'chat';
 
-export const ForemanDashboard: React.FC<ForemanDashboardProps> = ({ project, onUpdateProject }) => {
+export const ForemanDashboard: React.FC<ForemanDashboardProps> = ({ project, onUpdateProject, onLogout, onChangeProject }) => {
   const [activeTab, setActiveTab] = useState<TabId>('tasks');
 
   // --- Expense state ---
@@ -308,21 +310,35 @@ export const ForemanDashboard: React.FC<ForemanDashboardProps> = ({ project, onU
   return (
     <div className="max-w-md mx-auto bg-slate-50 min-h-screen pb-24 font-sans">
       {/* ===== HEADER ===== */}
-      <header className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white p-5 rounded-b-[2rem] shadow-xl">
+      <header className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white p-5 pb-8 rounded-b-[2rem] shadow-xl relative z-20">
         <div className="flex justify-between items-start mb-4">
           <div className="flex-1 min-w-0">
-            <h2 className="text-xl font-black tracking-tight truncate">{project.name}</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-black tracking-tight truncate">{project.name}</h2>
+              {onChangeProject && (
+                <button onClick={onChangeProject} className="bg-white/10 p-1 rounded-lg hover:bg-white/20 transition-colors shrink-0">
+                  <ChevronDown size={14} />
+                </button>
+              )}
+            </div>
             <p className="text-slate-400 text-xs flex items-center gap-1 mt-1">
               <MapPin size={12} className="text-orange-500 shrink-0" />
               <span className="truncate">{project.address}</span>
             </p>
           </div>
-          <button
-            onClick={() => setShowPhotoModal(true)}
-            className="bg-orange-600 p-3 rounded-2xl shadow-lg shadow-orange-900/40 hover:bg-orange-500 active:scale-95 transition-all ml-3 shrink-0"
-          >
-            <Camera size={22} />
-          </button>
+          <div className="flex items-center gap-2 ml-3 shrink-0">
+            <button
+              onClick={() => setShowPhotoModal(true)}
+              className="bg-orange-600 p-3 rounded-2xl shadow-lg shadow-orange-900/40 hover:bg-orange-500 active:scale-95 transition-all"
+            >
+              <Camera size={22} />
+            </button>
+            {onLogout && (
+              <button onClick={onLogout} className="bg-white/10 p-3 rounded-2xl hover:bg-white/20 transition-colors">
+                <LogOut size={22} />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Progress */}
@@ -343,28 +359,30 @@ export const ForemanDashboard: React.FC<ForemanDashboardProps> = ({ project, onU
       </header>
 
       {/* ===== TABS NAV ===== */}
-      <nav className="flex justify-between px-3 py-3 -mt-4 relative z-10 gap-1">
+      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex justify-between px-2 sm:px-4 py-3 pb-safe z-40 shadow-[0_-4px_15px_rgba(0,0,0,0.05)]">
         {tabs.map(tab => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex flex-col items-center gap-0.5 px-3 py-2.5 rounded-2xl transition-all relative ${
+            className={`flex flex-col items-center gap-1 px-2 py-1 rounded-2xl transition-all relative w-16 ${
               activeTab === tab.id
-                ? 'bg-white shadow-md text-slate-900 scale-105'
+                ? 'text-orange-600 scale-105'
                 : 'text-slate-400 hover:text-slate-600'
             }`}
           >
-            <tab.icon size={18} />
-            <span className="text-[9px] font-bold uppercase">{tab.label}</span>
+            <tab.icon size={22} className={activeTab === tab.id ? 'stroke-[2.5px]' : 'stroke-2'} />
+            <span className={`text-[9px] font-bold uppercase tracking-wider ${activeTab === tab.id ? 'opacity-100' : 'opacity-70'}`}>
+              {tab.label}
+            </span>
             {tab.id === 'chat' && unreadChat > 0 && (
-              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[8px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{unreadChat}</span>
+              <span className="absolute top-0 right-1 bg-red-500 text-white text-[8px] w-4 h-4 rounded-full flex items-center justify-center font-bold border-2 border-white">{unreadChat}</span>
             )}
           </button>
         ))}
       </nav>
 
       {/* ===== CONTENT ===== */}
-      <main className="px-4">
+      <main className="px-4 py-6 mb-20">
 
         {/* ========== TAB: TASKS ========== */}
         {activeTab === 'tasks' && (
@@ -455,11 +473,12 @@ export const ForemanDashboard: React.FC<ForemanDashboardProps> = ({ project, onU
                           <select
                             value={m.status}
                             onChange={e => handleSetMilestoneStatus(m.id, e.target.value as Milestone['status'])}
-                            className={`shrink-0 text-xs font-bold rounded-lg px-2 py-1.5 outline-none border-2 transition-colors cursor-pointer ${
+                            className={`min-h-[44px] shrink-0 text-sm font-bold rounded-xl px-3 py-2 outline-none border-2 transition-colors cursor-pointer appearance-none ${
                               m.status === 'completed' ? 'bg-green-50 border-green-300 text-green-700' :
                               m.status === 'current' ? 'bg-orange-50 border-orange-300 text-orange-700' :
                               'bg-slate-50 border-slate-200 text-slate-500'
                             }`}
+                            style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='currentColor'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 0.5rem center', backgroundSize: '1.2em' }}
                           >
                             <option value="pending">Ожидает</option>
                             <option value="current">Текущий</option>

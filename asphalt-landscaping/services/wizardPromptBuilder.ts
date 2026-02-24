@@ -97,8 +97,75 @@ export function buildPromptFromWizard(data: WizardData): string {
     lines.push(`- Ливневая канализация: ${drainParts.join(', ')}`);
   }
 
+  // ── Блок обязательных норм и предрасчёт объёмов ──
+  lines.push('');
+  lines.push('═══ ОБЯЗАТЕЛЬНЫЕ НОРМЫ РАСЧЁТА (использовать ТОЛЬКО эти значения) ═══');
+  lines.push('• Плотность а/б смеси: 2.5 т/м³ (= 125 кг/м² на каждые 50 мм толщины)');
+  lines.push('• Коэфф. уплотнения песка: 1.20 (объём песка = площадь × толщина_м × 1.20)');
+  lines.push('• Коэфф. уплотнения щебня: 1.30 (объём щебня = площадь × толщина_м × 1.30)');
+  lines.push('• Коэфф. разрыхления грунта: 1.25');
+  lines.push('• Самосвал грунт/мусор: 20 м³, доставка а/б смеси: до 30 т');
+
+  // Предрасчёт объёмов чтобы ИИ не считал сам
+  if (data.area > 0) {
+    lines.push('');
+    lines.push('═══ ПРЕДРАСЧЁТ ОБЪЁМОВ (используй именно эти цифры) ═══');
+
+    if (data.works.asphalt) {
+      if (data.asphaltLayers === 2) {
+        const topT = Math.round(data.area * (data.asphaltThickness / 1000) * 2.5 * 10) / 10;
+        const botT = Math.round(data.area * (data.asphaltBottomThickness / 1000) * 2.5 * 10) / 10;
+        const totalT = Math.round((topT + botT) * 10) / 10;
+        lines.push(`• А/б смесь верхний слой (${data.asphaltThickness} мм): ${data.area} × ${data.asphaltThickness / 1000} × 2.5 = ${topT} т`);
+        lines.push(`• А/б смесь нижний слой (${data.asphaltBottomThickness} мм): ${data.area} × ${data.asphaltBottomThickness / 1000} × 2.5 = ${botT} т`);
+        lines.push(`• ИТОГО а/б смесь: ${totalT} т`);
+        lines.push(`• Рейсов доставки а/б: ceil(${totalT} / 30) = ${Math.ceil(totalT / 30)}`);
+      } else {
+        const tons = Math.round(data.area * (data.asphaltThickness / 1000) * 2.5 * 10) / 10;
+        lines.push(`• А/б смесь (${data.asphaltThickness} мм): ${data.area} × ${data.asphaltThickness / 1000} × 2.5 = ${tons} т`);
+        lines.push(`• Рейсов доставки а/б: ceil(${tons} / 30) = ${Math.ceil(tons / 30)}`);
+      }
+    }
+
+    if (data.works.foundation) {
+      if (data.sandLayer > 0) {
+        const sandM3 = Math.round(data.area * (data.sandLayer / 1000) * 1.20 * 10) / 10;
+        lines.push(`• Песок (${data.sandLayer} мм): ${data.area} × ${data.sandLayer / 1000} × 1.20 = ${sandM3} м³`);
+      }
+      if (data.gravelLayer > 0) {
+        const gravelM3 = Math.round(data.area * (data.gravelLayer / 1000) * 1.30 * 10) / 10;
+        lines.push(`• Щебень (${data.gravelLayer} мм): ${data.area} × ${data.gravelLayer / 1000} × 1.30 = ${gravelM3} м³`);
+      }
+      if (data.geotextileDensity > 0) {
+        lines.push(`• Геотекстиль: ${data.area} м² (= площади объекта)`);
+      }
+    }
+
+    if (data.works.earthwork) {
+      let volM3: number;
+      if (data.excavationDepthMode === 'manual' && data.excavationManualUnit === 'm3') {
+        volM3 = data.excavationVolumeM3;
+        lines.push(`• Объём выемки грунта: ${volM3} м³ (задано вручную)`);
+      } else {
+        const depthMm = data.excavationDepthMode === 'manual'
+          ? data.excavationDepthCm * 10
+          : (data.works.foundation ? (data.sandLayer + data.gravelLayer) : 0) + (data.works.asphalt ? (data.asphaltLayers === 2 ? data.asphaltThickness + data.asphaltBottomThickness : data.asphaltThickness) : 0);
+        volM3 = Math.round(data.area * (depthMm / 1000) * 1.25 * 10) / 10;
+        lines.push(`• Объём выемки грунта: ${data.area} × ${depthMm / 1000} × 1.25 = ${volM3} м³`);
+      }
+      lines.push(`• Рейсов вывоза грунта (самосвал 20 м³): ceil(${volM3} / 20) = ${Math.ceil(volM3 / 20)}`);
+    }
+
+    if (data.works.demolition) {
+      const demVol = Math.round(data.area * (data.demolitionThickness / 1000) * 1.15 * 10) / 10;
+      lines.push(`• Объём демонтажного мусора: ${data.area} × ${data.demolitionThickness / 1000} × 1.15 = ${demVol} м³`);
+      lines.push(`• Рейсов вывоза мусора: ceil(${demVol} / 20) = ${Math.ceil(demVol / 20)}`);
+    }
+  }
+
   lines.push('');
   lines.push('ОБЯЗАТЕЛЬНО включи: прораб, дорожных рабочих, геодезиста (1 выезд), всю необходимую технику и доставку материалов.');
+  lines.push('ВАЖНО: Используй ТОЛЬКО предрасчитанные объёмы выше. НЕ пересчитывай самостоятельно.');
 
   if (data.comment.trim()) {
     lines.push('');

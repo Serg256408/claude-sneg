@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { Project, ServiceCategory, SERVICE_CATEGORY_LABELS, formatPrice, formatDate } from '../types';
-import { Trash2, ExternalLink, Calendar, MapPin, User, Search, Filter, SortAsc, SortDesc, ChevronDown, HardHat, TrendingUp, Clock, Image, BarChart3 } from 'lucide-react';
+import { Trash2, ExternalLink, Calendar, MapPin, User, Search, Filter, SortAsc, SortDesc, ChevronDown, HardHat, TrendingUp, Clock, Image, BarChart3, Wallet } from 'lucide-react';
 
 interface ProjectListProps {
   projects: Project[];
@@ -128,7 +128,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onSelect, on
           </button>
 
           {/* Sort buttons */}
-          <div className="flex gap-1">
+          <div className="flex gap-1 overflow-x-auto pb-2 -mx-1 px-1 sm:overflow-visible sm:pb-0 sm:mx-0 sm:px-0 w-full sm:w-auto hide-scrollbar">
             {([
               { key: 'date' as SortKey, label: 'Дата', icon: Calendar },
               { key: 'margin' as SortKey, label: 'Маржа', icon: TrendingUp },
@@ -138,8 +138,8 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onSelect, on
               <button
                 key={s.key}
                 onClick={() => toggleSort(s.key)}
-                className={`flex items-center gap-1 px-3 py-2.5 rounded-xl text-xs font-bold transition-colors ${
-                  sortKey === s.key ? 'bg-slate-900 text-white' : 'border border-slate-200 text-slate-500 hover:bg-slate-50'
+                className={`flex items-center gap-1 px-3 py-2.5 rounded-xl text-xs font-bold transition-colors whitespace-nowrap shrink-0 ${
+                  sortKey === s.key ? 'bg-slate-900 text-white shadow-md' : 'border border-slate-200 text-slate-500 hover:bg-slate-50'
                 }`}
               >
                 {s.label}
@@ -151,12 +151,12 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onSelect, on
 
         {/* Expandable filters */}
         {showFilters && (
-          <div className="flex flex-wrap gap-3 mt-4 pt-4 border-t border-slate-100">
+          <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-slate-100">
             {/* Status filter */}
-            <div>
+            <div className="flex-1 min-w-[120px]">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Статус</label>
               <select
-                className="border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-500"
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-500"
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
               >
@@ -168,10 +168,10 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onSelect, on
             </div>
 
             {/* Category filter */}
-            <div>
+            <div className="flex-1 min-w-[120px]">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Категория</label>
               <select
-                className="border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-500"
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-500"
                 value={categoryFilter}
                 onChange={(e) => setCategoryFilter(e.target.value)}
               >
@@ -304,17 +304,17 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onSelect, on
                   </div>
 
                   {/* Financial summary */}
-                  <div className="grid grid-cols-3 gap-3 pt-4 border-t border-slate-100">
-                    <div>
-                      <p className="text-[9px] text-slate-400 uppercase font-bold">Контракт</p>
-                      <p className="font-bold text-slate-800 text-sm">{(project.contractPrice / 1000).toFixed(0)}к</p>
+                  <div className="grid grid-cols-2 gap-2 mt-4 pt-4 border-t border-slate-100">
+                    <div className="bg-slate-50 p-2 rounded-lg">
+                      <p className="text-[9px] text-slate-400 uppercase font-bold mb-0.5 flex items-center gap-1">
+                        <Wallet size={10} /> Контракт
+                      </p>
+                      <p className="font-black text-slate-800 text-sm">{(project.contractPrice / 1000).toFixed(0)}к</p>
                     </div>
-                    <div>
-                      <p className="text-[9px] text-slate-400 uppercase font-bold">Расходы</p>
-                      <p className="font-bold text-slate-800 text-sm">{(allCosts / 1000).toFixed(0)}к</p>
-                    </div>
-                    <div>
-                      <p className="text-[9px] text-slate-400 uppercase font-bold">Маржа</p>
+                    <div className="bg-slate-50 p-2 rounded-lg">
+                      <p className="text-[9px] text-slate-400 uppercase font-bold mb-0.5 flex items-center gap-1">
+                        <TrendingUp size={10} /> Маржа
+                      </p>
                       <p className={`font-black text-sm ${margin > 20 ? 'text-green-600' : margin > 10 ? 'text-orange-600' : 'text-red-600'}`}>
                         {margin.toFixed(0)}%
                       </p>

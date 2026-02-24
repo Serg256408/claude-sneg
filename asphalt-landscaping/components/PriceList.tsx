@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { CLIENT_WORK_CATALOG, ClientWorkCatalogItem } from '../constants';
 import {
   loadPriceOverrides, savePriceOverrides,
@@ -8,7 +8,7 @@ import {
   loadRenames, saveRenames,
   loadUnitOverrides, saveUnitOverrides,
 } from '../services/priceListService';
-import { Search, ChevronDown, ChevronRight, RotateCcw, Plus, Trash2, FolderPlus, Edit3, Check, X } from 'lucide-react';
+import { Search, ChevronDown, ChevronRight, RotateCcw, Plus, Trash2, FolderPlus, Edit3, Check, X, Save } from 'lucide-react';
 
 const SECTION_ORDER = [
   'Асфальтирование',
@@ -46,25 +46,14 @@ export const PriceList: React.FC = () => {
   const [newItemPrice, setNewItemPrice] = useState('');
   const [showNewSection, setShowNewSection] = useState(false);
   const [newSectionName, setNewSectionName] = useState('');
-  const [editingName, setEditingName] = useState<string | null>(null); // originalName being edited
+  const [editingName, setEditingName] = useState<string | null>(null);
   const [editNameValue, setEditNameValue] = useState('');
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [dirty, setDirty] = useState(false);
   const newItemRef = useRef<HTMLInputElement>(null);
   const newSectionRef = useRef<HTMLInputElement>(null);
   const editNameRef = useRef<HTMLInputElement>(null);
 
   const defaultItemNames = useMemo(() => new Set(CLIENT_WORK_CATALOG.map(c => c.name)), []);
-
-  const debouncedSave = useCallback((newOverrides: Map<string, number>) => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      savePriceOverrides(newOverrides);
-    }, 500);
-  }, []);
-
-  useEffect(() => {
-    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
-  }, []);
 
   useEffect(() => {
     if (addingToSection && newItemRef.current) newItemRef.current.focus();
@@ -111,14 +100,23 @@ export const PriceList: React.FC = () => {
       newOverrides.set(itemName, num);
     }
     setOverrides(newOverrides);
-    debouncedSave(newOverrides);
+    setDirty(true);
   };
 
   const handleResetPrice = (itemName: string) => {
     const newOverrides = new Map(overrides);
     newOverrides.delete(itemName);
     setOverrides(newOverrides);
-    debouncedSave(newOverrides);
+    setDirty(true);
+  };
+
+  const handleSaveAll = () => {
+    savePriceOverrides(overrides);
+    saveCustomItems(customItems);
+    saveHiddenItems(hiddenItems);
+    saveRenames(renames);
+    saveUnitOverrides(unitOverrides);
+    setDirty(false);
   };
 
   const toggleSection = (section: string) => {
@@ -136,35 +134,27 @@ export const PriceList: React.FC = () => {
     const isDefault = origName ? defaultItemNames.has(origName) : defaultItemNames.has(displayName);
 
     if (isDefault) {
-      // Скрываем дефолтную позицию
       const realName = origName || displayName;
       const newHidden = new Set(hiddenItems);
       newHidden.add(realName);
       setHiddenItems(newHidden);
-      saveHiddenItems(newHidden);
-      // Убираем rename если был
       if (origName) {
         const newRenames = new Map(renames);
         newRenames.delete(origName);
         setRenames(newRenames);
-        saveRenames(newRenames);
       }
-      // Убираем override
       const newOverrides = new Map(overrides);
       newOverrides.delete(displayName);
       if (origName) newOverrides.delete(origName);
       setOverrides(newOverrides);
-      savePriceOverrides(newOverrides);
     } else {
-      // Удаляем кастомную позицию
       const updated = customItems.filter(c => c.name !== displayName);
       setCustomItems(updated);
-      saveCustomItems(updated);
       const newOverrides = new Map(overrides);
       newOverrides.delete(displayName);
       setOverrides(newOverrides);
-      savePriceOverrides(newOverrides);
     }
+    setDirty(true);
   };
 
   // ═══ Редактирование имени ═══
@@ -187,31 +177,25 @@ export const PriceList: React.FC = () => {
       const newRenames = new Map(renames);
       newRenames.set(realOrigName, newName);
       setRenames(newRenames);
-      saveRenames(newRenames);
-      // Перенести override на новое имя
       const newOverrides = new Map(overrides);
       const oldPrice = newOverrides.get(editingName);
       if (oldPrice !== undefined) {
         newOverrides.delete(editingName);
         newOverrides.set(newName, oldPrice);
         setOverrides(newOverrides);
-        savePriceOverrides(newOverrides);
       }
     } else {
-      // Кастомная позиция — переименовываем напрямую
       const updated = customItems.map(c => c.name === editingName ? { ...c, name: newName } : c);
       setCustomItems(updated);
-      saveCustomItems(updated);
-      // Перенести override
       const newOverrides = new Map(overrides);
       const oldPrice = newOverrides.get(editingName);
       if (oldPrice !== undefined) {
         newOverrides.delete(editingName);
         newOverrides.set(newName, oldPrice);
         setOverrides(newOverrides);
-        savePriceOverrides(newOverrides);
       }
     }
+    setDirty(true);
     setEditingName(null);
   };
 
@@ -226,7 +210,7 @@ export const PriceList: React.FC = () => {
     };
     const updated = [...customItems, item];
     setCustomItems(updated);
-    saveCustomItems(updated);
+    setDirty(true);
     setNewItemName('');
     setNewItemUnit('м²');
     setNewItemPrice('');
@@ -262,21 +246,18 @@ export const PriceList: React.FC = () => {
         newUnits.set(realName, newUnit);
       }
       setUnitOverrides(newUnits);
-      saveUnitOverrides(newUnits);
     } else {
       const updated = customItems.map(c => c.name === displayName ? { ...c, unit: newUnit } : c);
       setCustomItems(updated);
-      saveCustomItems(updated);
     }
+    setDirty(true);
   };
 
   const handleRestoreAll = () => {
     setHiddenItems(new Set());
-    saveHiddenItems(new Set());
     setRenames(new Map());
-    saveRenames(new Map());
     setUnitOverrides(new Map());
-    saveUnitOverrides(new Map());
+    setDirty(true);
   };
 
   const filteredCatalog = useMemo(() => {
@@ -305,7 +286,6 @@ export const PriceList: React.FC = () => {
     return sorted;
   }, [filteredCatalog, addingToSection]);
 
-  const totalOverrides = overrides.size;
   const totalWithPrices = allItems.filter(c => c.recommendedPrice !== undefined || overrides.has(c.name)).length;
 
   return (
@@ -324,12 +304,17 @@ export const PriceList: React.FC = () => {
                 <RotateCcw size={12} /> Восстановить удалённые
               </button>
             )}
-            {totalOverrides > 0 && (
-              <div className="flex items-center gap-1.5 bg-orange-50 text-orange-600 text-xs font-medium px-3 py-1.5 rounded-full">
-                <span className="w-2 h-2 rounded-full bg-orange-500"></span>
-                {totalOverrides} изменено
-              </div>
-            )}
+            <button
+              onClick={handleSaveAll}
+              disabled={!dirty}
+              className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+                dirty
+                  ? 'bg-green-600 text-white hover:bg-green-700 shadow-sm'
+                  : 'bg-slate-100 text-slate-400 cursor-default'
+              }`}
+            >
+              <Save size={14} /> Сохранить
+            </button>
           </div>
         </div>
         {/* Search + Add buttons */}
@@ -373,7 +358,6 @@ export const PriceList: React.FC = () => {
       {groupedBySection.map(({ section, items }) => {
         const isCollapsed = collapsedSections.has(section);
         const colors = SECTION_COLORS[section] || DEFAULT_COLORS;
-        const sectionOverrides = items.filter(i => overrides.has(i.name)).length;
         const sectionCustomCount = items.filter(i => !defaultItemNames.has(i.name) && !getOriginalName(i.name)).length;
 
         return (
@@ -393,9 +377,6 @@ export const PriceList: React.FC = () => {
               <span className={`${colors.badge} ${colors.text} text-xs font-bold px-2 py-0.5 rounded-full ml-auto`}>
                 {items.length}
               </span>
-              {sectionOverrides > 0 && (
-                <span className="w-2 h-2 rounded-full bg-orange-500" title={`${sectionOverrides} изменено`}></span>
-              )}
               {sectionCustomCount > 0 && (
                 <span className="text-[10px] font-bold text-teal-600 bg-teal-100 px-1.5 py-0.5 rounded">+{sectionCustomCount}</span>
               )}
@@ -413,7 +394,7 @@ export const PriceList: React.FC = () => {
                   const isEditing = editingName === item.name;
 
                   return (
-                    <div key={idx} className={`px-5 py-2.5 flex items-center gap-2 hover:bg-slate-50/50 transition-colors ${hasOverride ? 'bg-orange-50/30' : ''} ${isCustom ? 'bg-teal-50/20' : ''}`}>
+                    <div key={idx} className={`px-5 py-2.5 flex items-center gap-2 hover:bg-slate-50/50 transition-colors ${isCustom ? 'bg-teal-50/20' : ''}`}>
                       {/* Name — editable */}
                       <div className="flex-1 min-w-0">
                         {isEditing ? (
@@ -458,9 +439,9 @@ export const PriceList: React.FC = () => {
                       <div className="flex items-center gap-1.5 shrink-0">
                         <input
                           type="number"
-                          className={`w-24 text-right text-sm border rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-500 transition-colors ${
-                            hasOverride ? 'border-orange-300 bg-orange-50' : 'border-slate-200'
-                          } ${currentPrice === undefined ? 'text-slate-300' : 'text-slate-800 font-medium'}`}
+                          className={`w-24 text-right text-sm border border-slate-200 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-blue-400 transition-colors ${
+                            currentPrice === undefined ? 'text-slate-300' : 'text-slate-800 font-medium'
+                          }`}
                           value={currentPrice ?? ''}
                           onChange={(e) => handlePriceChange(item.name, e.target.value)}
                           placeholder="—"
