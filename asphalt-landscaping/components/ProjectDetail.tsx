@@ -1569,22 +1569,22 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
       {activeTab === 'foreman' && (
         <div className="space-y-6">
           {/* Summary cards */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-              <p className="text-[10px] font-bold text-slate-400 uppercase">Дневных отчётов</p>
-              <p className="text-2xl font-black text-slate-900">{(project.dailyReports || []).length}</p>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Дневных<br/>отчётов</p>
+              <p className="text-xl sm:text-2xl font-black text-slate-900 mt-1">{(project.dailyReports || []).length}</p>
             </div>
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-              <p className="text-[10px] font-bold text-slate-400 uppercase">Фото загружено</p>
-              <p className="text-2xl font-black text-slate-900">{(project.photos || []).length}</p>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Фото<br/>загружено</p>
+              <p className="text-xl sm:text-2xl font-black text-slate-900 mt-1">{(project.photos || []).length}</p>
             </div>
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-              <p className="text-[10px] font-bold text-slate-400 uppercase">Чек-листов</p>
-              <p className="text-2xl font-black text-slate-900">{(project.checklists || []).length}</p>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Чек-<br/>листов</p>
+              <p className="text-xl sm:text-2xl font-black text-slate-900 mt-1">{(project.checklists || []).length}</p>
             </div>
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-              <p className="text-[10px] font-bold text-slate-400 uppercase">Этапы</p>
-              <p className="text-2xl font-black text-slate-900">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Этапы<br/>завершены</p>
+              <p className="text-xl sm:text-2xl font-black text-slate-900 mt-1">
                 {(project.milestones || []).filter(m => m.status === 'completed').length}/{(project.milestones || []).length}
               </p>
             </div>
@@ -1811,22 +1811,22 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, resources
       {activeTab === 'expenses' && (
         <div className="space-y-6">
           {/* Summary */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-              <p className="text-[10px] font-bold text-slate-400 uppercase">Всего расходов</p>
-              <p className="text-2xl font-black text-slate-900">{(project.expenses || []).length}</p>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Всего<br/>расходов</p>
+              <p className="text-xl sm:text-2xl font-black text-slate-900 mt-1">{(project.expenses || []).length}</p>
             </div>
             <div className="bg-orange-50 p-4 rounded-xl border border-orange-200 shadow-sm">
-              <p className="text-[10px] font-bold text-orange-500 uppercase">Ожидают одобрения</p>
-              <p className="text-2xl font-black text-orange-600">{pendingExpenses.length}</p>
+              <p className="text-[10px] font-bold text-orange-500 uppercase tracking-widest leading-tight">Ожидают<br/>одобрения</p>
+              <p className="text-xl sm:text-2xl font-black text-orange-600 mt-1">{pendingExpenses.length}</p>
             </div>
             <div className="bg-green-50 p-4 rounded-xl border border-green-200 shadow-sm">
-              <p className="text-[10px] font-bold text-green-500 uppercase">Одобрено</p>
-              <p className="text-2xl font-black text-green-600">{formatPrice(approvedExpenses)}</p>
+              <p className="text-[10px] font-bold text-green-500 uppercase tracking-widest leading-tight">Одобрено<br/>в смету</p>
+              <p className="text-xl sm:text-2xl font-black text-green-600 mt-1">{formatPrice(approvedExpenses)}</p>
             </div>
             <div className="bg-red-50 p-4 rounded-xl border border-red-200 shadow-sm">
-              <p className="text-[10px] font-bold text-red-500 uppercase">Отклонено</p>
-              <p className="text-2xl font-black text-red-600">
+              <p className="text-[10px] font-bold text-red-500 uppercase tracking-widest leading-tight">Отклонено<br/>менеджером</p>
+              <p className="text-xl sm:text-2xl font-black text-red-600 mt-1">
                 {formatPrice((project.expenses || []).filter(e => e.status === 'rejected').reduce((s, e) => s + e.amount, 0))}
               </p>
             </div>

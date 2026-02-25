@@ -69,7 +69,15 @@ const App: React.FC = () => {
     return [MOCK_PROJECT];
   });
 
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(() => {
+    // Авто-выбор первого проекта при старте
+    const saved = localStorage.getItem('asphalt_projects_v3');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed.length > 0) return parsed[0].id;
+    }
+    return MOCK_PROJECT.id;
+  });
   const [showProjectSelector, setShowProjectSelector] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [currentProvider, setCurrentProvider] = useState<AIProvider>(getProvider());

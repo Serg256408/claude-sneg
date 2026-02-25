@@ -8,7 +8,7 @@ import {
 import {
   Camera, Plus, CheckCircle, Clock, MapPin, DollarSign, MessageSquare,
   ChevronRight, ListChecks, Image, FileText, CloudSun, Send, Trash2,
-  X, ChevronDown, AlertTriangle, Receipt, Users, Thermometer, BookOpen, LogOut,
+  X, ChevronDown, AlertTriangle, Receipt, Users, Thermometer, BookOpen, LogOut, Calendar,
 } from 'lucide-react';
 import { ChatWidget } from './ChatWidget';
 import { ConstructionReference } from './ConstructionReference';
@@ -924,6 +924,13 @@ export const ForemanDashboard: React.FC<ForemanDashboardProps> = ({ project, onU
               <button onClick={() => setShowExpenseModal(false)} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
             </div>
             <div className="space-y-4">
+              {/* Текущая дата */}
+              <div className="bg-slate-50 rounded-xl p-3 flex items-center gap-2">
+                <Calendar size={16} className="text-orange-500" />
+                <span className="text-sm font-bold text-slate-700">
+                  {new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' })}
+                </span>
+              </div>
               <input
                 placeholder="Что купили?"
                 className="w-full border-2 border-slate-200 rounded-xl p-3 text-sm outline-none focus:border-orange-500"
